@@ -12,6 +12,7 @@ Two people (James and ooVrq) each run one main Claude session on this repo. Foll
 
 - `bot/`: the bot (TypeScript, from the official starter kit). Run instructions are in [README.md](README.md).
 - `STRATEGY.md`: rules (checked against the server source) and game theory.
+- `HANDOFF.md`: open handoffs between us. Check it after every `git pull`.
 - `ANALYSIS.md`, `analysis/`: match-history analysis. The database is `data/scrabble.db` (git-ignored; rebuild with `python3 analysis/pull_data.py`).
 
 ## Never
