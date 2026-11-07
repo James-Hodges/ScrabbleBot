@@ -344,6 +344,9 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
   });
   conn.db.auctionResult.onInsert((_ctx, r) => {
     if (myBotId === null) return;
+    // We subscribe to every table, so this fires for every match on the
+    // server. Only print and log our own matches.
+    if (!inMatch(conn, r.matchId)) return;
     const winner =
       r.winnerBotId !== undefined && r.winnerBotId !== null
         ? String(r.winnerBotId)
@@ -351,7 +354,6 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
     console.log(
       `[${BOT_NAME}] match ${r.matchId} auction ${r.auctionId} '${r.letter}' → bot ${winner} paid ${r.paid}`,
     );
-    if (!inMatch(conn, r.matchId)) return;
     const winnerBotId = r.winnerBotId ?? null;
     matchLogs.log(r.matchId, "auction_result", {
       auctionId: r.auctionId,
