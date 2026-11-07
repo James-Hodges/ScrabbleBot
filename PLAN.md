@@ -94,7 +94,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S1-1 | Match state | | [ ] |
 | S1-2 | Unseen-tile pool | | [ ] |
 | S1-3 | Opponents' known letters | | [ ] |
-| S1-4 | Fast word index | | [ ] |
+| S1-4 | Fast word index | James | [ ] |
 | S1-5 | Hold letters for long words | | [ ] |
 | S1-6 | Empty the rack before the end | | [ ] |
 | S2-1 | Winning-bid table per letter and phase | | [ ] |
