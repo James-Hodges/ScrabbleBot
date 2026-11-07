@@ -28,6 +28,7 @@ import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { chooseWord, decideBid } from "./strategy.js";
+import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 
 const HOST = process.env.STDB_HOST ?? "https://maincloud.spacetimedb.com";
 const DB_NAME = process.env.STDB_DB ?? "scrabblebot";
@@ -73,6 +74,57 @@ let myBotId: bigint | null = null;
 const bidsByAuction = new Set<string>();
 const lastWordAttemptByMatch = new Map<string, number>();
 const WORD_RETRY_MS = 500;
+
+// S0-4 match logs: logs/<bot>-<matchId>-<time>.jsonl at the repo root.
+const matchLogs = new MatchLogs(defaultLogDir(), BOT_NAME);
+const seenAuctions = new Set<string>();
+const startedMatches = new Set<string>();
+const endedMatches = new Set<string>();
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function inMatch(conn: DbConnection, matchId: bigint): boolean {
+  if (myBotId === null) return false;
+  for (const p of conn.db.matchParticipant.iter()) {
+    if (p.matchId === matchId && p.botId === myBotId) return true;
+  }
+  return false;
+}
+
+function participantsSummary(conn: DbConnection, matchId: bigint) {
+  const rows = [];
+  for (const p of conn.db.matchParticipant.iter()) {
+    if (p.matchId !== matchId) continue;
+    rows.push({
+      botId: p.botId,
+      name: conn.db.bot.id.find(p.botId)?.name,
+      me: p.botId === myBotId,
+      score: Number(p.score),
+      balance: Number(p.balance),
+    });
+  }
+  return placings(rows);
+}
+
+function noteMatchStart(conn: DbConnection, matchId: bigint) {
+  const key = String(matchId);
+  if (startedMatches.has(key)) return;
+  const m = conn.db.matchState.id.find(matchId);
+  if (m?.status.tag !== "Running" || !inMatch(conn, matchId)) return;
+  startedMatches.add(key);
+  matchLogs.log(matchId, "match_start", {
+    myBotId,
+    startedAtMs: m.startedAt ? Number(m.startedAt.toMillis()) : undefined,
+    bagTotal: m.bagTotal,
+    auctionType: m.auctionType.tag,
+    auctionDurationMs: m.auctionDurationMs,
+    startingRackSize: m.startingRackSize,
+    participants: participantsSummary(conn, matchId),
+    rack: Object.fromEntries(rackForMatch(conn, matchId)),
+  });
+}
 
 function resolveMyBotId(conn: DbConnection): bigint | null {
   if (!myIdentity) return null;
@@ -121,22 +173,63 @@ function tryBid(
   auctionId: bigint,
   matchId: bigint,
   letter: string,
+  opensAtMs?: number,
 ) {
+  const seenMs = Date.now();
   if (myBotId === null) return;
   const key = `${matchId}:${auctionId}`;
   if (bidsByAuction.has(key)) return;
   const participant = participantForMatch(conn, matchId);
   if (!participant) return;
+  const match = conn.db.matchState.id.find(matchId);
+  const rack = rackForMatch(conn, matchId);
+  const t0 = performance.now();
   const amount = decideBid({
     letter,
     myBalance: participant.balance,
-    myRack: rackForMatch(conn, matchId),
+    myRack: rack,
+  });
+  const decideMs = performance.now() - t0;
+  const sendMs = Date.now();
+  if (amount > 0) {
+    conn.reducers
+      .submitBid({ auctionId, amount: BigInt(amount) })
+      .catch((err: unknown) => {
+        logFailure(`bid on auction ${auctionId}`)(err);
+        matchLogs.log(matchId, "bid_error", {
+          auctionId,
+          letter,
+          amount,
+          error: errMsg(err),
+          ...sinceOpen(Date.now(), opensAtMs, seenMs),
+        });
+      });
+    bidsByAuction.add(key);
+  }
+  // Log after sending so the file write never delays the bid.
+  if (!seenAuctions.has(key)) {
+    seenAuctions.add(key);
+    noteMatchStart(conn, matchId);
+    matchLogs.log(matchId, "auction_seen", {
+      auctionId,
+      letter,
+      round: match?.currentRound,
+      bagTotal: match?.bagTotal,
+      opensAtMs,
+      seenMs,
+      recvLagMs: opensAtMs !== undefined ? seenMs - opensAtMs : undefined,
+    });
+  }
+  matchLogs.log(matchId, amount > 0 ? "bid_sent" : "bid_skipped", {
+    auctionId,
+    letter,
+    amount,
+    balance: participant.balance,
+    rack: Object.fromEntries(rack),
+    decideMs: Math.round(decideMs * 1000) / 1000,
+    ...sinceOpen(sendMs, opensAtMs, seenMs),
   });
   if (amount <= 0) return;
-  conn.reducers
-    .submitBid({ auctionId, amount: BigInt(amount) })
-    .catch(logFailure(`bid on auction ${auctionId}`));
-  bidsByAuction.add(key);
   console.log(
     `[${BOT_NAME}] bid ${amount} on '${letter}' (match ${matchId}, auction ${auctionId})`,
   );
@@ -165,7 +258,10 @@ function tryPlayWord(conn: DbConnection) {
     console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);
     conn.reducers
       .submitWord({ matchId, word })
-      .catch(logFailure(`playing '${word}'`));
+      .catch((err: unknown) => {
+        logFailure(`playing '${word}'`)(err);
+        matchLogs.log(matchId, "word_rejected", { word, error: errMsg(err) });
+      });
   }
 }
 
@@ -220,7 +316,8 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
     .subscribeToAllTables();
 
   conn.db.auction.onInsert((_ctx: EventContext, a) => {
-    if (a.status.tag === "Open") tryBid(conn, a.id, a.matchId, a.letter);
+    if (a.status.tag === "Open")
+      tryBid(conn, a.id, a.matchId, a.letter, Number(a.opensAt.toMillis()));
   });
   conn.db.myRack.onInsert(() => tryPlayWord(conn));
   conn.db.myRack.onUpdate(() => tryPlayWord(conn));
@@ -236,15 +333,54 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
     console.log(
       `[${BOT_NAME}] match ${r.matchId} auction ${r.auctionId} '${r.letter}' → bot ${winner} paid ${r.paid}`,
     );
+    if (!inMatch(conn, r.matchId)) return;
+    const winnerBotId = r.winnerBotId ?? null;
+    matchLogs.log(r.matchId, "auction_result", {
+      auctionId: r.auctionId,
+      letter: r.letter,
+      winnerBotId,
+      won: winnerBotId !== null && winnerBotId === myBotId,
+      weBid: bidsByAuction.has(`${r.matchId}:${r.auctionId}`),
+      paid: r.paid,
+      closedAtMs: Number(r.closedAt.toMillis()),
+    });
+  });
+  conn.db.wordPlay.onInsert((_ctx, w) => {
+    if (!inMatch(conn, w.matchId)) return;
+    matchLogs.log(w.matchId, "word_played", {
+      botId: w.botId,
+      mine: w.botId === myBotId,
+      word: w.word,
+      baseScore: w.baseScore,
+      bonus: w.bonus,
+      reward: w.totalReward,
+    });
+  });
+  conn.db.matchState.onInsert((_ctx, m) => noteMatchStart(conn, m.id));
+  conn.db.matchParticipant.onInsert((_ctx, p) => {
+    if (p.botId === myBotId) noteMatchStart(conn, p.matchId);
   });
 
   // When a match this bot was in ends, hop back into the lobby.
   conn.db.matchState.onUpdate((_ctx, old, neu) => {
     if (myBotId === null) return;
+    if (neu.status.tag === "Running") noteMatchStart(conn, neu.id);
     if (old.status.tag !== "Ended" && neu.status.tag === "Ended") {
       const wasIn = Array.from(conn.db.matchParticipant.iter()).some(
         (p) => p.matchId === neu.id && p.botId === myBotId,
       );
+      if (wasIn && !endedMatches.has(String(neu.id))) {
+        endedMatches.add(String(neu.id));
+        const standings = participantsSummary(conn, neu.id);
+        matchLogs.log(neu.id, "match_end", {
+          endedAtMs: neu.endedAt ? Number(neu.endedAt.toMillis()) : undefined,
+          rounds: neu.currentRound,
+          myPlace: standings.find((s) => s.me)?.place,
+          standings,
+          rackLeft: Object.fromEntries(rackForMatch(conn, neu.id)),
+        });
+        matchLogs.close(neu.id);
+      }
       if (wasIn) {
         console.log(`[${BOT_NAME}] match ${neu.id} ended; rejoining lobby`);
         joinLobby(conn);
@@ -284,8 +420,12 @@ function bootstrapActivity(conn: DbConnection) {
       .catch(logFailure(`registering for tournament ${TOURNAMENT_ID}`));
   }
   joinLobby(conn);
+  for (const p of conn.db.matchParticipant.iter()) {
+    if (p.botId === myBotId) noteMatchStart(conn, p.matchId);
+  }
   for (const a of conn.db.auction.iter()) {
-    if (a.status.tag === "Open") tryBid(conn, a.id, a.matchId, a.letter);
+    if (a.status.tag === "Open")
+      tryBid(conn, a.id, a.matchId, a.letter, Number(a.opensAt.toMillis()));
   }
   tryPlayWord(conn);
 }
@@ -300,7 +440,10 @@ function main() {
     .onConnectError((_ctx: ErrorContext, err: Error) =>
       console.error("connect error:", err.message),
     )
-    .onDisconnect(() => console.log("disconnected"))
+    .onDisconnect(() => {
+      console.log("disconnected");
+      matchLogs.closeAll();
+    })
     .build();
 }
 
