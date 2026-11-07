@@ -90,7 +90,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S0-1 | Bot identity and token | James | [x] |
 | S0-2 | Starter kit in our repo | James | [x] |
 | S0-3 | First live match | James | [x] |
-| S0-4 | Match logging with bid timing | | [ ] |
+| S0-4 | Match logging with bid timing | ooVrq | [ ] |
 | S1-1 | Match state | | [ ] |
 | S1-2 | Unseen-tile pool | | [ ] |
 | S1-3 | Opponents' known letters | | [ ] |
