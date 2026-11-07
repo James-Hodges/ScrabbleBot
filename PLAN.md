@@ -26,6 +26,40 @@ We get there by doing what the leaders (LUCENT, Bron) do, plus what they still m
 - **Ship working code each sprint.** At the end of every sprint the bot must still connect and play a full match without crashing.
 - **Measure, don't guess.** Each sprint after the first ends with at least one live match, compared with the benchmarks below.
 
+### Working with Claude
+
+Each of us runs **one main Claude session** for the whole day. The main session coordinates; **subagents do the work**, one per story. This keeps the main session's context small, so it stays sharp for hours instead of filling up with code, test output and query results.
+
+**The main session:**
+
+- **Reads the plan and picks the next story** from the sprint board below.
+- **Starts one subagent per story** with a complete brief (see the template below). It doesn't write the story's code itself.
+- **Reviews what comes back:** reads the diff, runs `npm test` in `bot/`, and checks the acceptance criteria.
+- **Commits and pushes**, then ticks the story on the board. Only the main session commits; subagents never commit or push.
+- **Keeps its own context lean.** Big outputs (match logs, SQL results, long test runs) stay in subagents, which report back a short summary.
+
+**Running subagents in parallel:** only for stories whose files don't overlap; see the ownership table under [Parallel work](#parallel-work). Stories touching the same files run one after another.
+
+**Coordinating between our two sessions** goes through git, not chat:
+
+1. `git pull` before starting a story.
+2. Claim it on the sprint board (put your name in the Owner column), commit and push the claim, so the other session doesn't start it too.
+3. Push as soon as the story is done, then tick it.
+
+**Subagent brief template** (copy into each subagent's prompt):
+
+```
+Story: <ID and title from PLAN.md>
+Acceptance criteria: <copied from PLAN.md>
+Files you own: <paths>. Don't edit other files; if you need to, stop and say why.
+Interfaces to use: <e.g. the GameState type in bot/src/state.ts>
+Context: read STRATEGY.md and ANALYSIS.md sections <x> if needed.
+Done means: code written, `npm test` passes in bot/, `npx tsc --noEmit` is clean.
+Do not commit or push.
+Report back in under 200 words: what you changed (files), test results,
+anything unfinished or any decision the main session should make.
+```
+
 ### Definition of done (every story)
 
 - [ ] Code is committed and pushed to `main`.
@@ -46,6 +80,39 @@ Taken from ANALYSIS.md: first-place averages in recent real-bot matches, and the
 | 7+ letter words per match | 3.2 | 3.2 / 3.2 | ≥ 3 |
 | Coins left at the end | 36 | 28 / 52 | ≤ 10 |
 | Bought the last letter | – | – | never |
+
+## Sprint board
+
+The main sessions update this board: claim a story by putting your name in Owner and pushing, then tick it once it's committed and pushed. Owners in the backlog are only suggestions.
+
+| Story | Title | Owner | Done |
+|---|---|---|---|
+| S0-1 | Bot identity and token | James | [x] |
+| S0-2 | Starter kit in our repo | James | [x] |
+| S0-3 | First live match | James | [x] |
+| S0-4 | Match logging with bid timing | | [ ] |
+| S1-1 | Match state | | [ ] |
+| S1-2 | Unseen-tile pool | | [ ] |
+| S1-3 | Opponents' known letters | | [ ] |
+| S1-4 | Fast word index | | [ ] |
+| S1-5 | Hold letters for long words | | [ ] |
+| S1-6 | Empty the rack before the end | | [ ] |
+| S2-1 | Winning-bid table per letter and phase | | [ ] |
+| S2-2 | Letter valuation | | [ ] |
+| S2-3 | Bid formula | | [ ] |
+| S2-4 | Spend down coins | | [ ] |
+| S2-5 | Skip the last auction | | [ ] |
+| S2-6 | Early coin snowball | | [ ] |
+| S3-1 | Benchmark script | | [ ] |
+| S3-2 | Tune bid and play numbers | | [ ] |
+| S3-3 | Tag a version only when better | | [ ] |
+| B-1 | Register for the tournament | | [ ] |
+| B-2 | Deny letters to the leader | | [ ] |
+| B-3 | Push up rivals' prices | | [ ] |
+| B-4 | First-price auction mode | | [ ] |
+| B-5 | Guess opponents' starting tiles | | [ ] |
+| B-6 | Survive disconnects | | [ ] |
+| B-7 | Precomputed instant bids (only if needed) | | [ ] |
 
 ## Sprint plan
 
