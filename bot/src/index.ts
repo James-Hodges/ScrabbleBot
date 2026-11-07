@@ -27,8 +27,10 @@ import {
 import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { chooseWord, decideBid } from "./strategy.js";
+import { decideBid } from "./strategy.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
+import { choosePlay } from "./play.js";
+import { WordIndex } from "./words.js";
 
 const HOST = process.env.STDB_HOST ?? "https://maincloud.spacetimedb.com";
 const DB_NAME = process.env.STDB_DB ?? "scrabblebot";
@@ -68,12 +70,11 @@ const DICTIONARY: string[] = fs
   .map((l) => l.trim().toUpperCase())
   .filter((l) => l.length >= 2);
 DICTIONARY.sort((a, b) => b.length - a.length); // longest first for greedy pick
+const WORD_INDEX = new WordIndex(DICTIONARY);
 
 let myIdentity: Identity | null = null;
 let myBotId: bigint | null = null;
 const bidsByAuction = new Set<string>();
-const lastWordAttemptByMatch = new Map<string, number>();
-const WORD_RETRY_MS = 500;
 
 // S0-4 match logs: logs/<bot>-<matchId>-<time>.jsonl at the repo root.
 const matchLogs = new MatchLogs(defaultLogDir(), BOT_NAME);
@@ -235,33 +236,50 @@ function tryBid(
   );
 }
 
+// Rack states (per match) we've already submitted words for, including the
+// in-between states our own multi-word plays pass through, so the rack
+// updates those plays cause don't resubmit the same words.
+const playedRackStates = new Map<string, Set<string>>();
+
 function tryPlayWord(conn: DbConnection) {
   if (myBotId === null) return;
   // Only matches still being played. The bot keeps its letters from
   // matches that have ended, but can't play them.
-  const matches = new Set<bigint>();
+  const matches = new Map<bigint, number>(); // matchId -> bagTotal
   for (const p of conn.db.matchParticipant.iter()) {
     if (p.botId !== myBotId) continue;
     const m = conn.db.matchState.id.find(p.matchId);
-    if (m?.status.tag === "Running") matches.add(p.matchId);
+    if (m?.status.tag === "Running") matches.set(p.matchId, Number(m.bagTotal));
   }
-  const now = Date.now();
-  for (const matchId of matches) {
+  const rackKey = (r: Map<string, number>) =>
+    [...r].filter(([, n]) => n > 0).map(([c, n]) => c + n).sort().join("");
+  for (const [matchId, bagTotal] of matches) {
     const key = String(matchId);
-    if (now - (lastWordAttemptByMatch.get(key) ?? 0) < WORD_RETRY_MS) continue;
-    lastWordAttemptByMatch.set(key, now);
-    const word = chooseWord({
-      myRack: rackForMatch(conn, matchId),
-      dictionary: DICTIONARY,
+    const seen = playedRackStates.get(key) ?? new Set<string>();
+    playedRackStates.set(key, seen);
+    const rack = rackForMatch(conn, matchId);
+    if (seen.has(rackKey(rack))) continue;
+    const participant = participantForMatch(conn, matchId);
+    if (!participant) continue;
+    const words = choosePlay({
+      rack,
+      balance: participant.balance,
+      auctionsLeft: bagTotal + 1,
+      index: WORD_INDEX,
     });
-    if (!word) continue;
-    console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);
-    conn.reducers
-      .submitWord({ matchId, word })
-      .catch((err: unknown) => {
-        logFailure(`playing '${word}'`)(err);
-        matchLogs.log(matchId, "word_rejected", { word, error: errMsg(err) });
-      });
+    if (words.length === 0) continue;
+    const left = new Map(rack);
+    for (const word of words) {
+      seen.add(rackKey(left));
+      for (const c of word) left.set(c, (left.get(c) ?? 0) - 1);
+      console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);
+      conn.reducers
+        .submitWord({ matchId, word })
+        .catch((err: unknown) => {
+          logFailure(`playing '${word}'`)(err);
+          matchLogs.log(matchId, "word_rejected", { word, error: errMsg(err) });
+        });
+    }
   }
 }
 

@@ -95,7 +95,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S1-2 | Unseen-tile pool | | [ ] |
 | S1-3 | Opponents' known letters | | [ ] |
 | S1-4 | Fast word index | James | [x] |
-| S1-5 | Hold letters for long words | James | [ ] |
+| S1-5 | Hold letters for long words | James | [x] |
 | S1-6 | Empty the rack before the end | | [ ] |
 | S2-1 | Winning-bid table per letter and phase | | [ ] |
 | S2-2 | Letter valuation | | [ ] |
@@ -146,7 +146,7 @@ Priority uses MoSCoW: **M** = must, **S** = should, **C** = could. Estimates are
 | S1-3 | As the bot, I track each opponent's known letters. | Per opponent: letters won − letters played, plus a count of their unknown starting tiles still in hand (5 − starting letters they've revealed in words). | 20 | S | ooVrq |
 | S1-4 | As the bot, I find the best playable words quickly. | Dictionary loaded once into an index keyed by sorted letters (or counts). Returns the best word for a rack in < 100 ms; tested on sample racks. | 30 | M | James |
 | S1-5 | As the bot, I hold letters for long words. | Play policy: play a 7+ letter word as soon as one is possible; play a shorter word only if (a) we need coins to keep bidding, or (b) it's the endgame. Plays the highest-reward set of words, not just the longest single word. | 30 | M | James |
-| S1-6 | As the bot, I empty my rack before the match ends. | From about 3 auctions before the end, play every word we can, best first. A test shows no playable word is left in the rack at the end. | 15 | M | James |
+| S1-6 | As the bot, I empty my rack before the match ends. | From about 3 auctions before the end, play the best-scoring set of words (`bestWordSet` in `play.ts`, from S1-5). Word play also re-runs on every `matchState` update, not only when our rack changes, so the endgame dump and the low-coins refill fire even if we win nothing late. A test shows no playable word is left in the rack at the end. | 15 | M | James |
 
 ### Sprint 2: Bidding
 
