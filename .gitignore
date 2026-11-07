@@ -4,4 +4,9 @@ __pycache__/
 .venv/
 node_modules/
 .env
-data/
+/data/
+
+# Bot secrets and local output
+.token-*
+logs/
+bot/.upstream/
