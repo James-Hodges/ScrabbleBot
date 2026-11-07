@@ -6,7 +6,7 @@
   "scripts": {
     "generate": "bash scripts/generate.sh",
     "start": "tsx src/index.ts",
-    "test": "node --import tsx --test src/strategy.test.ts",
+    "test": "node --import tsx --test src/*.test.ts",
     "build": "tsc"
   },
   "dependencies": {
