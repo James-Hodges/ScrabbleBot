@@ -97,6 +97,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S1-4 | Fast word index | James | [x] |
 | S1-5 | Hold letters for long words | James | [x] |
 | S1-6 | Empty the rack before the end | | [ ] |
+| S1-7 | Subscribe only to our own matches (fixes out-of-memory crash) | James | [ ] |
 | S2-1 | Winning-bid table per letter and phase | | [ ] |
 | S2-2 | Letter valuation | | [ ] |
 | S2-3 | Bid formula | | [ ] |
@@ -147,6 +148,7 @@ Priority uses MoSCoW: **M** = must, **S** = should, **C** = could. Estimates are
 | S1-4 | As the bot, I find the best playable words quickly. | Dictionary loaded once into an index keyed by sorted letters (or counts). Returns the best word for a rack in < 100 ms; tested on sample racks. | 30 | M | James |
 | S1-5 | As the bot, I hold letters for long words. | Play policy: play a 7+ letter word as soon as one is possible; play a shorter word only if (a) we need coins to keep bidding, or (b) it's the endgame. Plays the highest-reward set of words, not just the longest single word. | 30 | M | James |
 | S1-6 | As the bot, I empty my rack before the match ends. | From about 3 auctions before the end, play the best-scoring set of words (`bestWordSet` in `play.ts`, from S1-5). Word play also re-runs on every `matchState` update, not only when our rack changes, so the endgame dump and the low-coins refill fire even if we win nothing late. A test shows no playable word is left in the rack at the end. | 15 | M | James |
+| S1-7 | As the bot, I start up without loading the whole server's history. | Replace `subscribeToAllTables()` with targeted subscriptions: our credential, bots, lobby, and only the matches we're in (match state, participants, auctions, results, words, our rack). Startup memory stays under ~300 MB and the bot plays a full match. Found when the bot crashed out of memory at ~3.4 GB downloading all ~1.75M auctions. | 30 | M | James |
 
 ### Sprint 2: Bidding
 
