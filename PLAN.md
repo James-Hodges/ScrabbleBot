@@ -91,7 +91,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S0-2 | Starter kit in our repo | James | [x] |
 | S0-3 | First live match | James | [x] |
 | S0-4 | Match logging with bid timing | ooVrq (live check: James, see HANDOFF.md) | [ ] |
-| S1-1 | Match state | | [ ] |
+| S1-1 | Match state | ooVrq | [ ] |
 | S1-2 | Unseen-tile pool | | [ ] |
 | S1-3 | Opponents' known letters | | [ ] |
 | S1-4 | Fast word index | James | [x] |
