@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { opponentLetters } from "./opponents.js";
 import { poolCheck, TILE_SET, TILE_SET_SIZE, unseenPool } from "./pool.js";
 import {
   buildMatchState,
@@ -219,6 +220,8 @@ interface SimView {
   s: MatchState;
   /** Bag + opponents' starting tiles really still on their racks. */
   actual: Rack;
+  /** Each opponent's true rack, split into won and starting tiles still held. */
+  racks: Map<bigint, { won: Rack; starting: Rack }>;
 }
 
 function simulate(seed: number, check: (v: SimView) => void) {
@@ -270,7 +273,10 @@ function simulate(seed: number, check: (v: SimView) => void) {
     const actual = rackOf(bag.join(""));
     for (const b of bots.slice(1))
       for (const l of b.starting) actual.set(l, (actual.get(l) ?? 0) + 1);
-    check({ s, actual });
+    const racks = new Map(
+      bots.slice(1).map((b) => [b.id, { won: rackOf(b.won.join("")), starting: rackOf(b.starting.join("")) }]),
+    );
+    check({ s, actual, racks });
   };
 
   const play = (b: SimBot) => {
@@ -357,4 +363,34 @@ test("simulated match: some words actually reveal opponent starting tiles", () =
     for (const r of unseenPool(s).revealedStarting.values()) for (const n of r.values()) revealed = Math.max(revealed, n);
   });
   assert.ok(revealed > 0);
+});
+
+test("simulated 6-player match: opponents' known letters match their true racks", () => {
+  for (const seed of [1, 2, 3, 42, 2026]) {
+    let steps = 0;
+    simulate(seed, ({ s, racks }) => {
+      steps++;
+      const ops = opponentLetters(s);
+      assert.equal(ops.size, 5);
+      for (const [id, truth] of racks) {
+        const where = `seed ${seed} step ${steps} bot ${id}`;
+        const o = ops.get(id)!;
+        assert.ok(o.ordered, where);
+        assert.equal(o.inconsistencies, 0, where);
+        let trueSize = 0;
+        const trueRack: Rack = new Map(truth.starting);
+        for (const [l, n] of truth.won) trueRack.set(l, (trueRack.get(l) ?? 0) + n);
+        for (const n of trueRack.values()) trueSize += n;
+        // known ⊆ true rack, and the tile count is exact.
+        for (const [l, n] of o.known) assert.ok(n <= (trueRack.get(l) ?? 0), `${where} ${l}`);
+        assert.equal(o.rackSize, trueSize, where);
+        // The sim plays won copies first (the observer's attribution), so
+        // known and hidden starting are exact too.
+        assert.deepEqual(obj(o.known), obj(truth.won), where);
+        let hidden = 0;
+        for (const n of truth.starting.values()) hidden += n;
+        assert.equal(o.hiddenStarting, hidden, where);
+      }
+    });
+  }
 });

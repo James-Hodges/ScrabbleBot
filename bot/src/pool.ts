@@ -27,8 +27,9 @@
 //   total unseen === bagTotal + Σ opponents (startingRackSize − revealed).
 // `poolCheck` returns both numbers so a live match can compare them.
 //
-// S1-3 (opponents' known letters) builds on `revealedStarting`.
+// The replay in (3) is shared with S1-3 (opponents.ts `opponentLetters`).
 
+import { add, opponentLetters, sum, wordLetters } from "./opponents.js";
 import type { MatchState } from "./state.js";
 import type { Rack } from "./words.js";
 
@@ -86,23 +87,6 @@ export interface PoolCheck {
   ok: boolean;
 }
 
-function add(r: Rack, letter: string, n = 1): void {
-  if (n === 0) return;
-  r.set(letter, (r.get(letter) ?? 0) + n);
-}
-
-function sum(r: Rack): number {
-  let s = 0;
-  for (const n of r.values()) s += n;
-  return s;
-}
-
-/** Letters A–Z of a word as a rack (case-insensitive; other chars ignored). */
-function wordLetters(word: string, into: Rack = new Map()): Rack {
-  for (const ch of word.toUpperCase()) if (ch >= "A" && ch <= "Z") add(into, ch);
-  return into;
-}
-
 /** Build the unseen-tile pool from a match state. Pure. */
 export function unseenPool(s: PoolInput): UnseenPool {
   let inconsistencies = 0;
@@ -142,47 +126,12 @@ export function unseenPool(s: PoolInput): UnseenPool {
     else if (n < 0) inconsistencies += -n;
   }
 
-  // (3) Opponents' revealed starting tiles, replayed in time order.
+  // (3) Opponents' revealed starting tiles: the shared replay (opponents.ts).
   const revealedStarting = new Map<bigint, Rack>();
   let unorderedFallbacks = 0;
-  const opponents = new Set<bigint>([...s.players.keys(), ...played.keys()]);
-  opponents.delete(s.myBotId);
-  for (const id of opponents) {
-    const wins = s.auctions.filter((a) => a.winnerBotId === id);
-    const plays = s.words.filter((w) => w.botId === id);
-    const timed =
-      wins.every((a) => a.closedAtMs !== undefined) &&
-      plays.every((w) => w.playedAtMs !== undefined);
-    const r: Rack = new Map();
-    if (timed) {
-      // Events by time; on a tie the auction comes first (a sim's play in
-      // closeAuction shares the result's reducer timestamp).
-      type Ev = { ms: number; kind: 0 | 1; seq: number; letters: string };
-      const evs: Ev[] = [
-        ...wins.map((a, i) => ({ ms: a.closedAtMs!, kind: 0 as const, seq: i, letters: a.letter })),
-        ...plays.map((w, i) => ({ ms: w.playedAtMs!, kind: 1 as const, seq: i, letters: w.word })),
-      ].sort((a, b) => a.ms - b.ms || a.kind - b.kind || a.seq - b.seq);
-      const wonHeld: Rack = new Map();
-      for (const e of evs) {
-        if (e.kind === 0) add(wonHeld, e.letters);
-        else
-          for (const [l, n] of wordLetters(e.letters)) {
-            // Assume won copies are played first: the tightest safe bound.
-            const fromWon = Math.min(n, wonHeld.get(l) ?? 0);
-            if (fromWon) add(wonHeld, l, -fromWon);
-            add(r, l, n - fromWon);
-          }
-      }
-    } else {
-      // Missing timestamps: unordered max(0, played − won), a looser bound.
-      unorderedFallbacks++;
-      const w = won.get(id);
-      for (const [l, n] of played.get(id) ?? []) {
-        const k = n - (w?.get(l) ?? 0);
-        if (k > 0) r.set(l, k);
-      }
-    }
-    revealedStarting.set(id, r);
+  for (const [id, o] of opponentLetters(s)) {
+    revealedStarting.set(id, o.revealedStarting);
+    if (!o.ordered) unorderedFallbacks++;
   }
 
   // unseen = tileSet − seen, clamped at 0.

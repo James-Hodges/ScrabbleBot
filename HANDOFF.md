@@ -21,3 +21,16 @@ Work that one of us built and the other needs to pick up. Delete an entry once i
   ```
 
   Pass = no output. Then tick S1-2 and delete this entry.
+
+## S1-3: Opponents' known letters (ooVrq → James)
+
+**Status:** code pushed, `npm test` 49/49 and `npx tsc --noEmit` clean. Nothing in `index.ts` calls it yet, so the only live path it touches is the S1-2 pool, which now uses the same replay. **Tick S1-3 together with S1-2** once S1-2's live check passes.
+
+- **New `bot/src/opponents.ts`:** `opponentLetters(state)` returns a Map from botId to `OpponentLetters`, with these fields:
+  - `known`: letters they won and haven't played, so certainly in their rack.
+  - `revealedStarting`: starting tiles they've shown in words.
+  - `hiddenStarting`: starting tiles still unseen.
+  - `rackSize`: their exact tile count when `ordered` is true.
+  - `balance`, `score` and `name`.
+- **For B-2 (deny letters to the leader):** combine `known` with `hiddenStarting` and the S1-2 unseen pool to judge how close a leader is to a 7-letter word.
+- **`known` errs low:** when they hold both a won and a starting copy of a letter and play one, we assume they played the won copy. `known` can then miss a letter they still hold, but it never lists one they don't.
