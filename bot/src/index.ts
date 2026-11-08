@@ -32,7 +32,14 @@ import { rawBid as decideRawBid, completesTarget, nearTarget, playedLongWord } f
 import { letterValues, type ValueTable } from "./value.js";
 import { applyBudget } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
-import { budgetHighValue, highValueBid, playFor, strategyFromEnv } from "./highValue.js";
+import {
+  budgetHighValue,
+  highValueBid,
+  highValuePlan,
+  playFor,
+  strategyFromEnv,
+  targetSummary,
+} from "./highValue.js";
 import { PlayGuard, playPhase } from "./playGuard.js";
 import { WordIndex } from "./words.js";
 import { matchStateFromConn } from "./state.js";
@@ -268,6 +275,10 @@ interface BidTarget {
   opensAtMs?: number;
 }
 
+// v2: committed target words per match (highValue.ts commitTargets), passed
+// back each decision so targets stay stable between auctions.
+const committedByMatch = new Map<string, string[]>();
+
 // Experiment: premium letters, big words (highValue.ts).
 function tryBidHighValue(conn: DbConnection, b: BidTarget) {
   const { state, letter } = b;
@@ -281,7 +292,9 @@ function tryBidHighValue(conn: DbConnection, b: BidTarget) {
     round: state.round,
     isLastAuction: state.isLastAuction,
     index: WORD_INDEX,
+    committed: committedByMatch.get(String(b.matchId)),
   });
+  if (bid.committed) committedByMatch.set(String(b.matchId), bid.committed.map((t) => t.word));
   // S2-4/S2-5 still apply; budgetHighValue keeps spend-down out of the reserve.
   const { amount, budgetReason, clampedToReserve } = budgetHighValue(bid, { ...state, letter });
   const decideMs = performance.now() - t0;
@@ -297,6 +310,9 @@ function tryBidHighValue(conn: DbConnection, b: BidTarget) {
     gain: bid.gain !== undefined ? Math.round(bid.gain * 100) / 100 : undefined,
     reserve: bid.reserve,
     clampedToReserve,
+    committed: targetSummary(bid.committed),
+    servesTarget: bid.served ? bid.served.length > 0 : undefined,
+    servedTargets: bid.served,
     decideMs: Math.round(decideMs * 1000) / 1000,
   });
 }
@@ -381,14 +397,49 @@ function tryPlayWord(conn: DbConnection) {
     const state = matchStateFromConn(conn, matchId, myBotId);
     if (!state) continue;
     const rack = state.myRack;
-    const phase = playPhase(state.auctionsLeft, state.myBalance);
+    const basePhase = playPhase(state.auctionsLeft, state.myBalance);
+    // highvalue v2 also depends on auctionsLeft and the unseen pool (waiting,
+    // refill protection), so it re-decides every auction outside the endgame.
+    const phase =
+      STRATEGY === "highvalue" && basePhase !== "endgame" ? `${basePhase}:${state.auctionsLeft}` : basePhase;
     if (!guard.shouldEvaluate(rack, phase)) continue;
-    const words = choosePlay({
-      rack,
-      balance: state.myBalance,
-      auctionsLeft: state.auctionsLeft,
-      index: WORD_INDEX,
-    });
+    let words: string[];
+    if (STRATEGY === "highvalue") {
+      const plan = highValuePlan({
+        rack,
+        balance: state.myBalance,
+        auctionsLeft: state.auctionsLeft,
+        index: WORD_INDEX,
+        pool: unseenPool(state).unseen,
+        committed: committedByMatch.get(key),
+      });
+      words = plan.words;
+      if (plan.committed.length > 0) committedByMatch.set(key, plan.committed.map((t) => t.word));
+      if (words.length > 0 || plan.waited) {
+        matchLogs.log(matchId, "play_decision", {
+          words,
+          waited: plan.waited !== undefined,
+          waitedWord: plan.waited?.word,
+          waitedReward: plan.waited?.reward,
+          waitFor: plan.waited?.longer,
+          waitForReward: plan.waited?.longerReward,
+          waitForMissing: plan.waited?.missing,
+          waitForP: plan.waited ? Math.round(plan.waited.p * 1000) / 1000 : undefined,
+          protectedLetters: plan.protectedLetters || undefined,
+          committed: targetSummary(plan.committed),
+          balance: state.myBalance,
+          auctionsLeft: state.auctionsLeft,
+          rack: Object.fromEntries(rack),
+        });
+      }
+    } else {
+      words = choosePlay({
+        rack,
+        balance: state.myBalance,
+        auctionsLeft: state.auctionsLeft,
+        index: WORD_INDEX,
+      });
+    }
     guard.record(rack, phase, words);
     for (const word of words) {
       console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);

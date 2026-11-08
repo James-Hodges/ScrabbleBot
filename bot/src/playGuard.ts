@@ -15,6 +15,9 @@
 // those states are blocked in every phase (the reward a landing word pays can
 // itself change the phase). Rk, after the last word lands, is fresh.
 //
+// The highvalue strategy (highValue.ts v2) also depends on auctionsLeft and
+// the unseen pool, so index.ts passes a finer key ("normal:<auctionsLeft>").
+//
 // Pure: no I/O.
 
 import { ENDGAME_AUCTIONS, LOW_BALANCE } from "./play.js";
@@ -44,7 +47,7 @@ export class PlayGuard {
   private readonly seen = new Set<string>();
 
   /** True if (rack, phase) hasn't been decided and none of our words are in flight. */
-  shouldEvaluate(rack: Rack, phase: PlayPhase): boolean {
+  shouldEvaluate(rack: Rack, phase: PlayPhase | string): boolean {
     const r = rackKey(rack);
     return !this.seen.has(`${r}|${IN_FLIGHT}`) && !this.seen.has(`${r}|${phase}`);
   }
@@ -53,7 +56,7 @@ export class PlayGuard {
    * Record the decision for (rack, phase). With words, also block every rack
    * state before the last word lands, in every phase.
    */
-  record(rack: Rack, phase: PlayPhase, words: readonly string[]): void {
+  record(rack: Rack, phase: PlayPhase | string, words: readonly string[]): void {
     const left = new Map(rack);
     this.seen.add(`${rackKey(left)}|${phase}`);
     for (const word of words) {
