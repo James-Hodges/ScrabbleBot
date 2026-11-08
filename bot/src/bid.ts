@@ -55,6 +55,13 @@ export interface RawBidContext {
   rack?: Rack;
   /** Optional WordIndex to perform exact word-completion checks. */
   index?: WordIndex;
+  /**
+   * Smallest word reward we would play now (play.ts minRewardFor). Bingo and
+   * snowball completions below it don't count. Default 0.
+   */
+  minReward?: number;
+  /** Value never drops below this after the rack synergy adjustment (small-rack floor). Default 0. */
+  floor?: number;
 }
 
 export type RawBidReason =
@@ -102,12 +109,13 @@ export function completesBingo(
   rack: Rack,
   letter: string,
   index: WordIndex,
+  minReward = 0,
 ): { word: string; reward: number } | null {
   const L = letter.toUpperCase();
   const next = new Map(rack);
   next.set(L, (next.get(L) ?? 0) + 1);
   const bestWith = index.best(next, { minLen: 7 });
-  if (!bestWith) return null;
+  if (!bestWith || bestWith.reward < minReward) return null;
   const bestWithout = index.best(rack, { minLen: 7 });
   if (!bestWithout || bestWith.reward > bestWithout.reward) {
     return bestWith;
@@ -122,6 +130,7 @@ export function completesSnowball(
   index: WordIndex,
   balance: number,
   round: number,
+  minReward = 0,
 ): { word: string; reward: number } | null {
   if (round > 25 && balance >= 35) return null;
   const bestWithout = index.best(rack, { minLen: 5 });
@@ -131,7 +140,7 @@ export function completesSnowball(
   const next = new Map(rack);
   next.set(L, (next.get(L) ?? 0) + 1);
   const bestWith = index.best(next, { minLen: 5 });
-  if (!bestWith) return null;
+  if (!bestWith || bestWith.reward < minReward) return null;
   if (!bestWithout || bestWith.reward > bestWithout.reward) {
     return bestWith;
   }
@@ -154,8 +163,8 @@ export function rawBid(ctx: RawBidContext): RawBid {
     return { amount: 0, value, ceiling: value * COINS_PER_POINT, marketCap: price(BASE_PCT), pct: BASE_PCT, reason: "no_balance" };
   }
 
-  const bingo = ctx.rack && ctx.index ? completesBingo(ctx.rack, ctx.letter, ctx.index) : null;
-  const snowball = ctx.rack && ctx.index ? completesSnowball(ctx.rack, ctx.letter, ctx.index, balance, ctx.round) : null;
+  const bingo = ctx.rack && ctx.index ? completesBingo(ctx.rack, ctx.letter, ctx.index, ctx.minReward ?? 0) : null;
+  const snowball = ctx.rack && ctx.index ? completesSnowball(ctx.rack, ctx.letter, ctx.index, balance, ctx.round, ctx.minReward ?? 0) : null;
   const isCompleter = Boolean(ctx.completesWord || bingo || snowball);
 
   let value = valueFor(ctx.values, ctx.letter);
@@ -178,7 +187,7 @@ export function rawBid(ctx: RawBidContext): RawBid {
       const vowelRatio = totalTiles > 0 ? vowelCount / totalTiles : 0.4;
       const copiesHave = ctx.rack.get(L) ?? 0;
 
-      if (copiesHave >= 2 && value < 1.0) {
+      if (copiesHave >= 2 && value < 1.0 && (ctx.floor ?? 0) <= 0) {
         return { amount: 0, value: 0, ceiling: 0, marketCap: price(BASE_PCT), pct: BASE_PCT, reason: "no_value" };
       }
 
@@ -194,7 +203,7 @@ export function rawBid(ctx: RawBidContext): RawBid {
       if (copiesHave === 1 && !["E", "A", "I", "O", "R", "S", "T", "N"].includes(L)) {
         synergy -= 3.0;
       }
-      value = Math.max(0, value + synergy);
+      value = Math.max(ctx.floor ?? 0, value + synergy);
     }
   }
 

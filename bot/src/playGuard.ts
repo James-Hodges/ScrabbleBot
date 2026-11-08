@@ -1,32 +1,27 @@
 // Play guard (S1-6): decides when word play needs re-evaluating.
 //
-// `choosePlay` is a function of (rack, phase) only:
-// - endgame: `bestWordSet(rack)`, balance ignored;
-// - otherwise long words, then a refill word if balance (plus the long
-//   words' rewards) is under LOW_BALANCE. If the rack holds a long word we
-//   play it, so the rack changes; with none, the refill test is exactly
-//   `balance < LOW_BALANCE`, i.e. the refill phase.
+// `choosePlay` is a function of (rack, phase) only, where phase is
+// playPhase(auctionsLeft, hasPlayedWord) (play.ts):
+// - endgame: `bestWordSet(rack)`;
+// - otherwise the best words whose reward clears minRewardFor(phase):
+//   BOMB_MIN_REWARD before our first word (until the deadline), MIN_REWARD
+//   after it or past the deadline. Balance is not an input.
 // So an unchanged (rack, phase) never needs a second look, and a phase
-// change on an unchanged rack does.
+// change on an unchanged rack does: reaching the bomb deadline, our first
+// word landing (it also changes the rack), or the endgame starting.
 //
 // Our own plays: submitting words W1..Wk from rack R0 passes through
 // R1..Rk as each word lands. While the rack is R0..R(k-1), some of our words
 // are still in flight, and any decision there would include them again, so
-// those states are blocked in every phase (the reward a landing word pays can
-// itself change the phase). Rk, after the last word lands, is fresh.
+// those states are blocked in every phase (a landing word flips
+// hasPlayedWord, which changes the phase). Rk, after the last word lands, is fresh.
 //
 // Pure: no I/O.
 
-import { ENDGAME_AUCTIONS, refillThreshold } from "./play.js";
+import { playPhase, type PlayPhase } from "./play.js";
 import type { Rack } from "./words.js";
 
-export type PlayPhase = "endgame" | "refill" | "normal";
-
-export function playPhase(auctionsLeft: number, balance: number): PlayPhase {
-  if (auctionsLeft <= ENDGAME_AUCTIONS) return "endgame";
-  if (balance < refillThreshold(auctionsLeft)) return "refill";
-  return "normal";
-}
+export { playPhase, type PlayPhase };
 
 /** Canonical rack key, e.g. "A2C1T1". */
 export function rackKey(rack: Rack): string {

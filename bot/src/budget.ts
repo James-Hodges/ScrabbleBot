@@ -28,7 +28,10 @@
 //   amount       = max(rawBid, ceil(target)), capped so we keep
 //                  MIN_RESERVE_PER_AUCTION for each later non-last auction
 //                  (unless this is the second-to-last), and never above balance.
-// Outside the window: rawBid capped at balance (tuning left to S3-2).
+// Outside the window: rawBid capped at balance (tuning left to S3-2), and at
+// balance − reserveCoins: before our first (bomb) word we keep enough coins to
+// buy the target word's remaining letters, since we can no longer refill
+// with small words (index.ts sets reserveCoins via bombReserve).
 
 import { priceFor, type Pct } from "./prices.js";
 
@@ -42,6 +45,8 @@ export const WANT_SHARE = 0.5;
 export const MIN_RESERVE_PER_AUCTION = 1;
 /** With this many non-last auctions left (incl. this one), bid the floor without a market cap. */
 export const ALL_IN_AUCTIONS = 2;
+/** Before the bomb lands, coins kept back per target tile still to buy. */
+export const BOMB_RESERVE_PER_TILE = 6;
 /**
  * Market percentile by non-last auctions left: the first row whose
  * `minSpendable` is ≤ spendable wins. Higher percentiles as time runs out.
@@ -60,6 +65,17 @@ export interface BudgetContext {
   myBalance: number;
   /** Letter on the open auction. */
   letter: string;
+  /** Coins to keep back outside the spend-down window (see bombReserve). Default 0. */
+  reserveCoins?: number;
+}
+
+/**
+ * Coins to keep for the bomb target: BOMB_RESERVE_PER_TILE per tile still
+ * missing, not counting the open letter when it is one of them.
+ */
+export function bombReserve(missing: string, letter: string): number {
+  const n = missing.length - (missing.includes(letter.toUpperCase()) ? 1 : 0);
+  return Math.max(0, n) * BOMB_RESERVE_PER_TILE;
 }
 
 export type BudgetReason =
@@ -67,6 +83,7 @@ export type BudgetReason =
   | "not_wanted"
   | "no_balance"
   | "normal"
+  | "reserve"
   | "spend_down"
   | "spend_down_no_surplus";
 
@@ -95,7 +112,13 @@ export function applyBudget(rawBid: number, ctx: BudgetContext): BudgetResult {
   if (balance <= 0) return { amount: 0, reason: "no_balance", pace };
 
   const raw = Math.min(Math.floor(rawBid), balance);
-  if (ctx.auctionsLeft > SPEND_DOWN_AUCTIONS) return { amount: raw, reason: "normal", pace };
+  if (ctx.auctionsLeft > SPEND_DOWN_AUCTIONS) {
+    const keep = Math.max(0, Math.floor(ctx.reserveCoins ?? 0));
+    if (keep > 0 && raw > balance - keep) {
+      return { amount: Math.max(0, balance - keep), reason: "reserve", pace };
+    }
+    return { amount: raw, reason: "normal", pace };
+  }
 
   const surplus = balance - TARGET_LEFTOVER;
   if (surplus <= 0) return { amount: raw, reason: "spend_down_no_surplus", pace };

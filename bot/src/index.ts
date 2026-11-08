@@ -29,10 +29,10 @@ import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { rawBid as decideRawBid, completesTarget } from "./bid.js";
-import { letterValues, type ValueTable } from "./value.js";
-import { applyBudget } from "./budget.js";
+import { planValues, targetMissing, type PlanTable } from "./target.js";
+import { applyBudget, bombReserve } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
-import { choosePlay } from "./play.js";
+import { choosePlay, minRewardFor } from "./play.js";
 import { PlayGuard, playPhase } from "./playGuard.js";
 import { WordIndex } from "./words.js";
 import { matchStateFromConn } from "./state.js";
@@ -172,28 +172,35 @@ function logFailure(what: string) {
     );
 }
 
-// One ValueTable per match, reused while (rack, auctionsLeft, round) is
-// unchanged: tryBid can run more than once for the same auction.
-const valueCache = new Map<string, { key: string; table: ValueTable }>();
+// One value table per match, reused while (rack, auctionsLeft, round,
+// hasPlayedWord) is unchanged: tryBid can run more than once for the same auction.
+const valueCache = new Map<string, { key: string; table: PlanTable }>();
+
+/** Whether we have played a word in this match (the bomb is down). */
+function hasPlayedWord(state: NonNullable<ReturnType<typeof matchStateFromConn>>): boolean {
+  return state.words.some((w) => w.botId === state.myBotId);
+}
 
 function valueTableFor(
   matchId: bigint,
   state: NonNullable<ReturnType<typeof matchStateFromConn>>,
-): ValueTable {
+  played: boolean,
+): PlanTable {
   const rackKey = [...state.myRack.entries()]
     .filter(([, n]) => n > 0)
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([l, n]) => `${l}${n}`)
     .join("");
-  const key = `${rackKey}|${state.auctionsLeft}|${state.round}`;
+  const key = `${rackKey}|${state.auctionsLeft}|${state.round}|${played}`;
   const hit = valueCache.get(String(matchId));
   if (hit && hit.key === key) return hit.table;
-  const table = letterValues({
+  const table = planValues({
     rack: state.myRack,
     pool: unseenPool(state).unseen,
     auctionsLeft: state.auctionsLeft,
     index: WORD_INDEX,
     explain: true,
+    hasPlayedWord: played,
   });
   valueCache.set(String(matchId), { key, table });
   return table;
@@ -217,7 +224,10 @@ function tryBid(
   const t0 = performance.now();
   // S2-2: letter values. unseenPool already counts the open auction's letter
   // as seen, so poolIncludesLetter stays unset.
-  const table = valueTableFor(matchId, state);
+  // Bomb rework: values also count long target words, gated by the play phase.
+  const played = hasPlayedWord(state);
+  const table = valueTableFor(matchId, state, played);
+  const missing = targetMissing(table.target, rack);
   // S2-3: market-anchored bid with bingo & early snowball detection.
   const bid = decideRawBid({
     letter,
@@ -228,10 +238,14 @@ function tryBid(
     completesWord: completesTarget(table, rack, letter),
     rack,
     index: WORD_INDEX,
+    minReward: table.minReward,
+    floor: table.floor,
   });
   const rawBid = bid.amount;
   // S2-4/S2-5: spend-down pace and never bidding on the last auction.
-  const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter });
+  // Before the bomb, keep coins for the target's remaining letters.
+  const reserveCoins = played ? 0 : bombReserve(missing, letter);
+  const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter, reserveCoins });
   const decideMs = performance.now() - t0;
   const sendMs = Date.now();
   if (amount > 0) {
@@ -279,6 +293,13 @@ function tryBid(
     bidReason: bid.reason,
     balance: state.myBalance,
     rack: Object.fromEntries(rack),
+    playPhase: table.phase,
+    target: table.target?.word,
+    targetReward: table.target?.reward,
+    targetMissing: missing || undefined,
+    targetProb: table.target ? Math.round(table.target.prob * 1000) / 1000 : undefined,
+    reserveCoins,
+    valueFloor: table.floor,
     decideMs: Math.round(decideMs * 1000) / 1000,
     ...sinceOpen(sendMs, opensAtMs, seenMs),
   });
@@ -293,8 +314,8 @@ function tryBid(
 const playGuards = new Map<string, PlayGuard>();
 
 // Runs on our rack changes, on every round of our running matches, and on
-// our balance changes, so the endgame dump and the refill fire even when the
-// rack hasn't changed.
+// our participant-row updates, so the bomb deadline and the endgame dump fire
+// even when the rack hasn't changed. Balance is no longer a play input.
 function tryPlayWord(conn: DbConnection) {
   if (myBotId === null) return;
   // Only matches still being played. The bot keeps its letters from
@@ -312,15 +333,25 @@ function tryPlayWord(conn: DbConnection) {
     const state = matchStateFromConn(conn, matchId, myBotId);
     if (!state) continue;
     const rack = state.myRack;
-    const phase = playPhase(state.auctionsLeft, state.myBalance);
+    const played = hasPlayedWord(state);
+    const phase = playPhase(state.auctionsLeft, played);
     if (!guard.shouldEvaluate(rack, phase)) continue;
     const words = choosePlay({
       rack,
-      balance: state.myBalance,
       auctionsLeft: state.auctionsLeft,
+      hasPlayedWord: played,
       index: WORD_INDEX,
     });
     guard.record(rack, phase, words);
+    if (words.length > 0) {
+      matchLogs.log(matchId, "play_chosen", {
+        words,
+        playPhase: phase,
+        minReward: minRewardFor(phase),
+        auctionsLeft: state.auctionsLeft,
+        balance: state.myBalance,
+      });
+    }
     for (const word of words) {
       console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);
       conn.reducers
@@ -434,7 +465,7 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
   conn.db.matchParticipant.onInsert((_ctx, p) => {
     if (p.botId === myBotId) noteMatchStart(conn, p.matchId);
   });
-  // Our balance changed: may cross into or out of the refill phase.
+  // Our participant row changed (balance, score): cheap to re-check; the guard skips unchanged phases.
   conn.db.matchParticipant.onUpdate((_ctx, _old, p) => {
     if (p.botId === myBotId) tryPlayWord(conn);
   });

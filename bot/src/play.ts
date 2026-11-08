@@ -1,22 +1,28 @@
-// Play policy (S1-5): hold letters for long words.
+// Play policy (S1-5, bomb rework): hold letters for big words.
 //
-// - A 7+ letter word earns ~3x per tile what a short word does, so play one
-//   as soon as the rack can spell it.
-// - Otherwise hold, unless we are short of coins to keep bidding, or it is
-//   the endgame, when we play the highest-total-reward set of words.
+// - Our first word of the match must be a "bomb": reward >= BOMB_MIN_REWARD
+//   (typically 8-10 letters with a high-value tile). With BOMB_DEADLINE_AUCTIONS
+//   or fewer auctions left the first-word bar drops to MIN_REWARD so we never
+//   hold forever.
+// - After the first word, play any word with reward >= MIN_REWARD.
+// - Never play a word under MIN_REWARD outside the endgame. Being low on
+//   coins is not a reason to play a small word (the old refill rule is gone).
+// - Endgame (auctionsLeft <= ENDGAME_AUCTIONS): play the highest-total-reward
+//   set of words, any size.
+//
+// The decision depends only on (rack, phase), where phase is
+// playPhase(auctionsLeft, hasPlayedWord); playGuard.ts relies on that.
 //
 // Pure: no I/O, no clock reads except the endgame search's time cap.
 
 import { letterValue, rackCounts, type Rack, type WordIndex } from "./words.js";
 
-/** Words at least this long are played as soon as possible. */
-export const LONG_WORD_LEN = 7;
-/** Below this balance we play a word to refill coins (dynamic by match phase). */
-export const LOW_BALANCE = 20;
-export const EARLY_REFILL_BALANCE = 35;
-export const MID_REFILL_BALANCE = 25;
-/** Minimum length preferred for a coin-refill word (falls back to any word). */
-export const REFILL_MIN_LEN = 4;
+/** Outside the endgame, never play a word with a smaller reward. */
+export const MIN_REWARD = 30;
+/** Until our first word lands, it must reward at least this much. */
+export const BOMB_MIN_REWARD = 60;
+/** At or below this many auctions left (incl. the open one) the first word only needs MIN_REWARD. */
+export const BOMB_DEADLINE_AUCTIONS = 20;
 /** At or below this many auctions left (including the open one) it's the endgame. */
 export const ENDGAME_AUCTIONS = 3;
 
@@ -25,67 +31,52 @@ export const SET_MAX_WORDS = 4;
 export const SET_BRANCHING = 12;
 export const SET_TIME_CAP_MS = 25;
 
-export interface PlayContext {
-  rack: Rack;
-  /** Our current coin balance. */
-  balance: number;
-  /** Auctions left in the match, including the currently open one. */
-  auctionsLeft: number;
-  index: WordIndex;
+/**
+ * - bomb: no word played yet, before the deadline (min reward BOMB_MIN_REWARD)
+ * - bomb_late: no word played yet, past the deadline (min reward MIN_REWARD)
+ * - post_bomb: we have played a word (min reward MIN_REWARD)
+ * - endgame: play everything (bestWordSet)
+ */
+export type PlayPhase = "bomb" | "bomb_late" | "post_bomb" | "endgame";
+
+export function playPhase(auctionsLeft: number, hasPlayedWord: boolean): PlayPhase {
+  if (auctionsLeft <= ENDGAME_AUCTIONS) return "endgame";
+  if (hasPlayedWord) return "post_bomb";
+  return auctionsLeft <= BOMB_DEADLINE_AUCTIONS ? "bomb_late" : "bomb";
 }
 
-/** Threshold below which we play a word to refill coins. */
-export function refillThreshold(auctionsLeft: number): number {
-  if (auctionsLeft > 43) return EARLY_REFILL_BALANCE; // rounds 1-25
-  if (auctionsLeft > 13) return MID_REFILL_BALANCE;   // rounds 26-55
-  return LOW_BALANCE;
+/** Smallest reward a word may have to be played in `phase` (0 in the endgame). */
+export function minRewardFor(phase: PlayPhase): number {
+  if (phase === "endgame") return 0;
+  return phase === "bomb" ? BOMB_MIN_REWARD : MIN_REWARD;
+}
+
+export interface PlayContext {
+  rack: Rack;
+  /** Auctions left in the match, including the currently open one. */
+  auctionsLeft: number;
+  /** Whether we have already played a word this match (default false). */
+  hasPlayedWord?: boolean;
+  index: WordIndex;
 }
 
 /** The word(s) to play now, in order. Empty means hold. */
 export function choosePlay(ctx: PlayContext): string[] {
   const { index } = ctx;
-  if (ctx.auctionsLeft <= ENDGAME_AUCTIONS) return bestWordSet(ctx.rack, index);
+  let phase = playPhase(ctx.auctionsLeft, ctx.hasPlayedWord ?? false);
+  if (phase === "endgame") return bestWordSet(ctx.rack, index);
 
   const rack = new Map(ctx.rack);
-  let balance = ctx.balance;
   const plays: string[] = [];
-
-  // Long words first, as many as the rack allows.
+  // Highest-reward word first, as long as it clears the phase's bar. Once
+  // one lands we are post-bomb, so later words only need MIN_REWARD.
   for (;;) {
-    const long = index.best(rack, { minLen: LONG_WORD_LEN });
-    if (!long) break;
-    plays.push(long.word);
-    balance += long.reward;
-    removeWord(rack, long.word);
+    const best = index.best(rack);
+    if (!best || best.reward < minRewardFor(phase)) break;
+    plays.push(best.word);
+    removeWord(rack, best.word);
+    phase = "post_bomb";
   }
-
-  // Short of coins: one word to refill, preferring 5+ then 4+ letters.
-  const threshold = refillThreshold(ctx.auctionsLeft);
-  if (balance < threshold) {
-    const refill =
-      index.best(rack, { minLen: 5 }) ??
-      index.best(rack, { minLen: REFILL_MIN_LEN }) ??
-      index.best(rack);
-    if (refill) {
-      plays.push(refill.word);
-      balance += refill.reward;
-      removeWord(rack, refill.word);
-    }
-  }
-
-  // Cluttered rack safeguard: if rack has 9+ tiles and cannot spell 7+ letter words,
-  // play a high-reward 6-letter word to prevent gridlock.
-  let tileCount = 0;
-  for (const [, n] of rack) tileCount += n;
-  if (tileCount >= 9) {
-    const declutter = index.best(rack, { minLen: 6 });
-    if (declutter && declutter.reward >= 20) {
-      plays.push(declutter.word);
-      balance += declutter.reward;
-      removeWord(rack, declutter.word);
-    }
-  }
-
   return plays;
 }
 

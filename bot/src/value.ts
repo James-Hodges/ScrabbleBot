@@ -67,6 +67,8 @@ export interface ValueContext {
   poolIncludesLetter?: boolean;
   /** Fill `targets` with each letter's main target word. */
   explain?: boolean;
+  /** Ignore words rewarding less than this (we would not play them). Default 0. */
+  minReward?: number;
 }
 
 export interface Target {
@@ -193,8 +195,10 @@ export function letterValues(ctx: ValueContext): ValueTable {
   const notRack = ~rackMask;
   const missing = new Uint8Array(26);
   const missIdx: number[] = [];
+  const minReward = ctx.minReward ?? 0;
   for (const e of ctx.index.entries) {
     if (live === 0) break;
+    if (e.reward < minReward) break; // entries are sorted by reward desc
     if (e.length > rackTiles + maxScan) continue;
     if (popcount(e.mask & notRack) > maxScan) continue;
     let k = 0;
