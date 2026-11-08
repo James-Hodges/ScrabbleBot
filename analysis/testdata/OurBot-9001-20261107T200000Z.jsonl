@@ -1,0 +1,19 @@
+{"t":"2026-11-07T20:00:00.000Z","ms":1794081600000,"event":"match_start","matchId":9001,"myBotId":7,"startedAtMs":1794081600000,"bagTotal":4,"auctionType":"Vickrey","participants":[{"botId":7,"name":"OurBot","me":true,"score":0,"balance":100,"place":1}]}
+{"t":"2026-11-07T20:00:01.000Z","ms":1794081601000,"event":"auction_seen","matchId":9001,"auctionId":1001,"letter":"Q","round":1,"bagTotal":3,"opensAtMs":1794081600990,"seenMs":1794081601000,"recvLagMs":10}
+{"t":"2026-11-07T20:00:01.005Z","ms":1794081601005,"event":"bid_sent","matchId":9001,"auctionId":1001,"letter":"Q","amount":12,"rawBid":12,"budgetReason":"normal","balance":100,"decideMs":2.5,"sinceOpenMs":15,"openBasis":"server"}
+{"t":"2026-11-07T20:00:02.000Z","ms":1794081602000,"event":"auction_result","matchId":9001,"auctionId":1001,"letter":"Q","winnerBotId":7,"won":true,"weBid":true,"paid":10,"closedAtMs":1794081602000}
+{"t":"2026-11-07T20:00:02.010Z","ms":1794081602010,"event":"auction_seen","matchId":9001,"auctionId":1002,"letter":"U","round":2,"bagTotal":2,"opensAtMs":1794081602000,"seenMs":1794081602010,"recvLagMs":10}
+{"t":"2026-11-07T20:00:02.020Z","ms":1794081602020,"event":"bid_sent","matchId":9001,"auctionId":1002,"letter":"U","amount":8,"rawBid":8,"budgetReason":"normal","balance":90,"decideMs":4.0,"sinceOpenMs":20,"openBasis":"server"}
+{"t":"2026-11-07T20:00:03.000Z","ms":1794081603000,"event":"auction_result","matchId":9001,"auctionId":1002,"letter":"U","winnerBotId":7,"won":true,"weBid":true,"paid":5,"closedAtMs":1794081603000}
+{"t":"2026-11-07T20:00:03.010Z","ms":1794081603010,"event":"auction_seen","matchId":9001,"auctionId":1003,"letter":"Z","round":3,"bagTotal":1,"opensAtMs":1794081603000,"seenMs":1794081603010,"recvLagMs":10}
+{"t":"2026-11-07T20:00:03.011Z","ms":1794081603011,"event":"bid_skipped","matchId":9001,"auctionId":1003,"letter":"Z","amount":0,"rawBid":0,"budgetReason":"not_wanted","balance":85,"decideMs":1.0,"sinceOpenMs":11,"openBasis":"server"}
+{"t":"2026-11-07T20:00:04.000Z","ms":1794081604000,"event":"auction_result","matchId":9001,"auctionId":1003,"letter":"Z","winnerBotId":9,"won":false,"weBid":false,"paid":20,"closedAtMs":1794081604000}
+{"t":"2026-11-07T20:00:04.100Z","ms":1794081604100,"event":"word_played","matchId":9001,"botId":7,"mine":true,"word":"QUIXOTIC","baseScore":20,"bonus":20,"reward":40}
+{"t":"2026-11-07T20:00:04.200Z","ms":1794081604200,"event":"word_played","matchId":9001,"botId":9,"mine":false,"word":"ZYMOLOGY","baseScore":30,"bonus":20,"reward":50}
+{"t":"2026-11-07T20:00:04.300Z","ms":1794081604300,"event":"word_played","matchId":9001,"botId":7,"mine":true,"word":"CAT","baseScore":5,"bonus":0,"reward":5}
+{"t":"2026-11-07T20:00:04.310Z","ms":1794081604310,"event":"auction_seen","matchId":9001,"auctionId":1004,"letter":"E","round":4,"bagTotal":0,"opensAtMs":1794081604300,"seenMs":1794081604310,"recvLagMs":10}
+{"t":"2026-11-07T20:00:04.320Z","ms":1794081604320,"event":"bid_sent","matchId":9001,"auctionId":1004,"letter":"E","amount":3,"rawBid":3,"budgetReason":"spend_down","balance":30,"decideMs":3.0,"sinceOpenMs":20,"openBasis":"server"}
+{"t":"2026-11-07T20:00:05.000Z","ms":1794081605000,"event":"auction_result","matchId":9001,"auctionId":1004,"letter":"E","winnerBotId":7,"won":true,"weBid":true,"paid":2,"closedAtMs":1794081605000}
+{"t":"2026-11-07T20:00:05.050Z","ms":1794081605050,"event":"word_rejected","matchId":9001,"word":"EE","error":"Match not running"}
+
+{"t":"2026-11-07T20:00:05.100Z","ms":1794081605100,"event":"match_end","matchId":9001,"rounds":4,"myPlace":2,"standings":[{"botId":9,"name":"Rival","me":false,"score":80,"balance":10,"place":1},{"botId":7,"name":"OurBot","me":true,"score":50,"balance":30,"place":2},{"botId":8,"name":"Other","me":false,"score":50,"balance":40,"place":2}],"rackLeft":{}}

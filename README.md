@@ -75,3 +75,15 @@ BOT_NAME=main TOURNAMENT_ID=<id> npm start
 ```
 
 Keep the bot running for the whole tournament. Offline bots still get seated and lose every auction they don't bid in.
+
+## Benchmarks
+
+`analysis/benchmark.py` (S3-1, Python stdlib) prints our numbers next to the [PLAN.md benchmark table](PLAN.md#benchmarks), with a ✓/✗ per target:
+
+```bash
+python3 -I analysis/benchmark.py --bot 'Nigel "Bidderson" Richards'   # public history in data/scrabble.db
+python3 -I analysis/benchmark.py --bot '<name>' --refresh --last 10    # re-pull the DB first (resumable)
+python3 -I analysis/benchmark.py --logs logs/                          # our S0-4 logs: adds bid timing and the B-7 verdict
+```
+
+Filters: `--since <ISO time | match id>`, `--last N`, and for the DB `--version N` and `--sample analysis` (ANALYSIS.md's 3-day, 4+ real-bot sample; `--until` moves the window). `--json` gives machine-readable output for the tuning log. Tests: `python3 -I -m unittest discover -s analysis`.
