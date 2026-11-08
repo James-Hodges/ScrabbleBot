@@ -28,9 +28,10 @@ import {
 import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { rawBid as decideRawBid, completesTarget } from "./bid.js";
 import { auctionTarget, planValues, targetMissing, type PlanTable } from "./target.js";
-import { applyBudget, bombReserve } from "./budget.js";
+import { bidModeFrom, decideBid } from "./decide.js";
+import type { LambdaResult } from "./lambda.js";
+import type { TableType } from "./rivalBids.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 import { choosePlay, minRewardFor } from "./play.js";
 import { PlayGuard, playPhase } from "./playGuard.js";
@@ -51,6 +52,8 @@ const BOT_NAME = process.env.BOT_NAME ?? "bot";
 const BOT_TOKEN = process.env.BOT_TOKEN; // from the website, first run only
 const BOT_NONCE = process.env.BOT_NONCE; // from the CLI, first run only
 const TOURNAMENT_ID = process.env.TOURNAMENT_ID;
+// S3-4: "lambda" (default on experiment/lambda) or "current" (improved-bot's bidding), for A/B.
+const BID_MODE = bidModeFrom(process.env.BID_MODE);
 const TOKEN_PATH = path.join(process.cwd(), `.token-${BOT_NAME}`);
 
 function loadToken(): string | undefined {
@@ -133,6 +136,7 @@ function noteMatchStart(conn: DbConnection, matchId: bigint) {
   startedMatches.add(key);
   matchLogs.log(matchId, "match_start", {
     myBotId,
+    bidMode: BID_MODE,
     startedAtMs: m.startedAt ? Number(m.startedAt.toMillis()) : undefined,
     bagTotal: m.bagTotal,
     auctionType: m.auctionType.tag,
@@ -206,6 +210,17 @@ function valueTableFor(
   return table;
 }
 
+// S3-4: the last λ solve per match (decide.ts reuses it while its key is unchanged).
+const lambdaCache = new Map<string, { key: string; result: LambdaResult }>();
+
+/** "sim" when a simulated bot is seated in the match, else "real" (rivalBids.ts). */
+function tableTypeFor(conn: DbConnection, matchId: bigint): TableType {
+  for (const p of conn.db.matchParticipant.iter()) {
+    if (p.matchId === matchId && conn.db.bot.id.find(p.botId)?.isSimulated) return "sim";
+  }
+  return "real";
+}
+
 function tryBid(
   conn: DbConnection,
   auctionId: bigint,
@@ -220,7 +235,7 @@ function tryBid(
   const state = matchStateFromConn(conn, matchId, myBotId);
   if (!state) return;
   const rack = state.myRack;
-  // decideMs times valuation, the bid formula and applyBudget together (the whole decision).
+  // decideMs times valuation and the bid decision together (incl. the λ solve in lambda mode).
   const t0 = performance.now();
   // S2-2: letter values. unseenPool already counts the open auction's letter
   // as seen, so poolIncludesLetter stays unset.
@@ -231,24 +246,22 @@ function tryBid(
   // the unseen pool, so table.target alone forgets the tile on the block.
   const { target, source: targetSource } = auctionTarget(table, letter);
   const missing = targetMissing(target, rack);
-  // S2-3: market-anchored bid with bingo & early snowball detection.
-  const bid = decideRawBid({
+  // S3-4: BID_MODE picks the λ bid or improved-bot's rawBid + applyBudget (decide.ts).
+  const tableType = tableTypeFor(conn, matchId);
+  const decision = decideBid({
+    mode: BID_MODE,
     letter,
-    values: table,
-    balance: state.myBalance,
-    auctionsLeft: state.auctionsLeft,
-    round: state.round,
-    completesWord: completesTarget(table, rack, letter),
-    rack,
+    state,
+    table,
+    played,
+    missing,
     index: WORD_INDEX,
-    minReward: table.minReward,
-    floor: table.floor,
+    unseen: BID_MODE === "lambda" ? unseenPool(state).unseen : new Map(),
+    tableType,
+    lambdaCache: lambdaCache.get(String(matchId)) ?? null,
   });
-  const rawBid = bid.amount;
-  // S2-4/S2-5: spend-down pace and never bidding on the last auction.
-  // Before the bomb, keep coins for the target's remaining letters.
-  const reserveCoins = played ? 0 : bombReserve(missing, letter);
-  const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter, reserveCoins });
+  if (decision.lambdaCache) lambdaCache.set(String(matchId), decision.lambdaCache);
+  const amount = decision.amount;
   const decideMs = performance.now() - t0;
   const sendMs = Date.now();
   if (amount > 0) {
@@ -287,13 +300,7 @@ function tryBid(
     auctionId,
     letter,
     amount,
-    rawBid,
-    budgetReason,
-    value: Math.round(bid.value * 100) / 100,
-    ceiling: Math.round(bid.ceiling * 100) / 100,
-    marketCap: bid.marketCap,
-    marketPct: bid.pct,
-    bidReason: bid.reason,
+    ...decision.fields,
     balance: state.myBalance,
     rack: Object.fromEntries(rack),
     playPhase: table.phase,
@@ -302,7 +309,6 @@ function tryBid(
     targetMissing: missing || undefined,
     targetProb: target ? Math.round(target.prob * 1000) / 1000 : undefined,
     targetSource: target ? targetSource : undefined,
-    reserveCoins,
     valueFloor: table.floor,
     decideMs: Math.round(decideMs * 1000) / 1000,
     ...sinceOpen(sendMs, opensAtMs, seenMs),
@@ -628,7 +634,7 @@ function bootstrapActivity(conn: DbConnection) {
 }
 
 function main() {
-  console.log(`[${BOT_NAME}] connecting to ${DB_NAME} at ${HOST}`);
+  console.log(`[${BOT_NAME}] connecting to ${DB_NAME} at ${HOST} (BID_MODE=${BID_MODE})`);
   DbConnection.builder()
     .withUri(HOST)
     .withDatabaseName(DB_NAME)
