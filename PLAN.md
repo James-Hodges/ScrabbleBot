@@ -227,4 +227,5 @@ Record each change made during Sprint 3 here.
 
 | Time | Change | Matches | Avg place | Tiles won | Coins left | Notes |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| 16:20 | Baseline: S2-3 bid formula, `COINS_PER_POINT` 1.4 | 1 (45094) | 6.0 | 8 | 33 | 40 pts. Value ceiling set 62 of 64 bids. |
+| 16:40 | `COINS_PER_POINT` 1.4 → 2.3 (`8cc98c4`) | 9 (45120–45173) | 3.00 | 13.1 | 27.7 | 88.9 pts, 22% wins, 1.44 words of 7+, 12.3 coins/tile. Ceiling-bound bids (60% of bids) win only 8%; market-capped 39%; spend-down 44%. Win rate by phase: rounds 1–20 9%, 21–54 21%, 55–67 44%. Kept. |
