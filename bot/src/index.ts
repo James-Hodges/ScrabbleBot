@@ -32,8 +32,8 @@ import { rawBid as decideRawBid, completesTarget } from "./bid.js";
 import { planValues, targetMissing, type PlanTable } from "./target.js";
 import { applyBudget, bombReserve } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
-import { choosePlay } from "./play.js";
-import { PlayGuard, playKey, playPhase } from "./playGuard.js";
+import { choosePlay, minRewardFor } from "./play.js";
+import { PlayGuard, playPhase } from "./playGuard.js";
 import { WordIndex } from "./words.js";
 import { matchStateFromConn } from "./state.js";
 import { poolCheck, unseenPool } from "./pool.js";
@@ -173,7 +173,7 @@ function logFailure(what: string) {
 }
 
 // One value table per match, reused while (rack, auctionsLeft, round,
-// balance, hasPlayedWord) is unchanged: tryBid can run more than once for the same auction.
+// hasPlayedWord) is unchanged: tryBid can run more than once for the same auction.
 const valueCache = new Map<string, { key: string; table: PlanTable }>();
 
 /** Whether we have played a word in this match (the bomb is down). */
@@ -191,7 +191,7 @@ function valueTableFor(
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([l, n]) => `${l}${n}`)
     .join("");
-  const key = `${rackKey}|${state.auctionsLeft}|${state.round}|${state.myBalance}|${played}`;
+  const key = `${rackKey}|${state.auctionsLeft}|${state.round}|${played}`;
   const hit = valueCache.get(String(matchId));
   if (hit && hit.key === key) return hit.table;
   const table = planValues({
@@ -201,8 +201,6 @@ function valueTableFor(
     index: WORD_INDEX,
     explain: true,
     hasPlayedWord: played,
-    balance: state.myBalance,
-    round: state.round,
   });
   valueCache.set(String(matchId), { key, table });
   return table;
@@ -246,17 +244,8 @@ function tryBid(
   const rawBid = bid.amount;
   // S2-4/S2-5: spend-down pace and never bidding on the last auction.
   // Before the bomb, keep coins for the target's remaining letters.
-  const reserveCoins = played ? 0 : bombReserve(missing, letter, state.myBalance, table.cut?.affordShare ?? 1);
-  // Before the first word: per-letter cap and coin floor (budget.ts bombCap).
-  const bomb = table.phase === "bomb"
-    ? {
-        missing,
-        targetOk: (table.target?.reward ?? 0) >= table.minReward,
-        completes: bid.reason === "completes_bingo" || bid.reason === "completes_snowball",
-        rackTiles: [...rack.values()].reduce((a, n) => a + n, 0),
-      }
-    : undefined;
-  const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter, reserveCoins, bomb });
+  const reserveCoins = played ? 0 : bombReserve(missing, letter);
+  const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter, reserveCoins });
   const decideMs = performance.now() - t0;
   const sendMs = Date.now();
   if (amount > 0) {
@@ -311,10 +300,6 @@ function tryBid(
     targetProb: table.target ? Math.round(table.target.prob * 1000) / 1000 : undefined,
     reserveCoins,
     valueFloor: table.floor,
-    minReward: table.minReward,
-    cutoff: table.cut ? Math.round(table.cut.cutoff) : undefined,
-    holdValue: table.cut ? Math.round(table.cut.holdValue * 10) / 10 : undefined,
-    affordShare: table.cut ? Math.round(table.cut.affordShare * 100) / 100 : undefined,
     decideMs: Math.round(decideMs * 1000) / 1000,
     ...sinceOpen(sendMs, opensAtMs, seenMs),
   });
@@ -329,8 +314,8 @@ function tryBid(
 const playGuards = new Map<string, PlayGuard>();
 
 // Runs on our rack changes, on every round of our running matches, and on
-// our participant-row updates, so the sliding first-word cutoff and the endgame dump fire
-// even when the rack hasn't changed. Balance and round move the cutoff.
+// our participant-row updates, so the bomb deadline and the endgame dump fire
+// even when the rack hasn't changed. Balance is no longer a play input.
 function tryPlayWord(conn: DbConnection) {
   if (myBotId === null) return;
   // Only matches still being played. The bot keeps its letters from
@@ -350,29 +335,19 @@ function tryPlayWord(conn: DbConnection) {
     const rack = state.myRack;
     const played = hasPlayedWord(state);
     const phase = playPhase(state.auctionsLeft, played);
-    // Before the first word: the sliding cutoff (needs the target, so the
-    // cached value table). Rounded, so the guard key and the decision agree.
-    const cut = phase === "bomb" ? valueTableFor(matchId, state, played).cut : null;
-    const cutoff = cut ? Math.round(cut.cutoff) : undefined;
-    const guardKey = playKey(phase, cutoff);
-    if (!guard.shouldEvaluate(rack, guardKey)) continue;
+    if (!guard.shouldEvaluate(rack, phase)) continue;
     const words = choosePlay({
       rack,
       auctionsLeft: state.auctionsLeft,
       hasPlayedWord: played,
-      cutoff,
       index: WORD_INDEX,
     });
-    guard.record(rack, guardKey, words);
+    guard.record(rack, phase, words);
     if (words.length > 0) {
       matchLogs.log(matchId, "play_chosen", {
         words,
         playPhase: phase,
-        cutoff,
-        timeBar: cut ? Math.round(cut.timeBar * 10) / 10 : undefined,
-        holdValue: cut ? Math.round(cut.holdValue * 10) / 10 : undefined,
-        affordShare: cut ? Math.round(cut.affordShare * 100) / 100 : undefined,
-        targetCost: cut?.targetCost,
+        minReward: minRewardFor(phase),
         auctionsLeft: state.auctionsLeft,
         balance: state.myBalance,
       });
@@ -490,7 +465,7 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
   conn.db.matchParticipant.onInsert((_ctx, p) => {
     if (p.botId === myBotId) noteMatchStart(conn, p.matchId);
   });
-  // Our participant row changed (balance, score): balance moves the first-word cutoff.
+  // Our participant row changed (balance, score): cheap to re-check; the guard skips unchanged phases.
   conn.db.matchParticipant.onUpdate((_ctx, _old, p) => {
     if (p.botId === myBotId) tryPlayWord(conn);
   });

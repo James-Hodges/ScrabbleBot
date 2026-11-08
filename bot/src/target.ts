@@ -22,7 +22,7 @@
 //              still needs at least base × TARGET_TILE_SHARE / k
 //
 // Candidates come from the phase:
-//   bomb       (first word, timeBar ≥ BOMB_TARGET_MIN_BAR) 8–10 letters, reward ≥ BOMB_MIN_REWARD, at least one tile worth ≥ HIGH_TILE_VALUE
+//   bomb       8–10 letters, reward ≥ BOMB_MIN_REWARD, at least one tile worth ≥ HIGH_TILE_VALUE
 //   otherwise  7–10 letters, reward ≥ MIN_REWARD
 // The candidate lists are built once per WordIndex and cached.
 //
@@ -31,16 +31,7 @@
 //
 // Pure and deterministic.
 
-import {
-  BOMB_MIN_REWARD,
-  ENDGAME_AUCTIONS,
-  MIN_REWARD,
-  clampCutoff,
-  playPhase,
-  timeBar as timeBarFor,
-  type PlayPhase,
-} from "./play.js";
-import { priceFor, type Pct } from "./prices.js";
+import { BOMB_MIN_REWARD, ENDGAME_AUCTIONS, MIN_REWARD, minRewardFor, playPhase, type PlayPhase } from "./play.js";
 import { letterValues, type ValueContext, type ValueTable } from "./value.js";
 import { letterValue, rackCounts, type Rack, type WordEntry, type WordIndex } from "./words.js";
 
@@ -49,7 +40,7 @@ export const HIGH_TILE_VALUE = 4;
 /** Bomb candidate lengths. */
 export const BOMB_MIN_LEN = 8;
 export const BOMB_MAX_LEN = 10;
-/** Post-bomb (and late first-word) candidate lengths. */
+/** Post-bomb (and past the deadline) candidate lengths. */
 export const POST_MIN_LEN = 7;
 export const POST_MAX_LEN = 10;
 /** Most tiles a candidate may still need (bomb / otherwise). */
@@ -69,14 +60,6 @@ export const TARGET_TILE_SHARE = 1;
 export const SMALL_RACK_TILES = 6;
 /** Floor value (points) per letter when the rack is small. */
 export const RACK_FLOOR_POINTS = 2;
-/** Before the first word, use bomb candidates (8-10 letters, 60+) while timeBar is at least this. */
-export const BOMB_TARGET_MIN_BAR = 45;
-/** Market percentile used to price the target's missing tiles. */
-export const TARGET_COST_PCT: Pct = 50;
-/** Price assumed for a letter with no price data. */
-export const DEFAULT_TILE_PRICE = 5;
-/** At or below this balance we count as broke: holdValue is 0. */
-export const BROKE_BALANCE = 5;
 /** Near the endgame, value.ts counts every word (it will be played in the endgame dump). */
 export const VALUE_ENDGAME_LOOKAHEAD = 2;
 
@@ -89,8 +72,6 @@ export interface TargetWord {
   missing: number;
   /** Estimated completion probability (incl. discount). */
   prob: number;
-  /** Completion probability without TILE_DISCOUNT (used for holdValue). */
-  complete: number;
 }
 
 export interface TargetTable {
@@ -229,7 +210,6 @@ export function targetValues(ctx: TargetContext): TargetTable {
   let bestK = -1;
   let bestAt = -1;
   let bestProb = 0;
-  let bestComplete = 0;
   const withL = new Float64Array(26);
   const { rewards, start, letters, counts } = cs;
   const n = rewards.length;
@@ -269,7 +249,6 @@ export function targetValues(ctx: TargetContext): TargetTable {
         bestAt = w;
         bestK = k;
         bestProb = prob * discount[k];
-        bestComplete = prob;
       }
     }
     // rack + L for each needed letter L.
@@ -295,123 +274,55 @@ export function targetValues(ctx: TargetContext): TargetTable {
     values,
     base,
     target:
-      bestAt >= 0 ? { word: cs.words[bestAt], reward: rewards[bestAt], missing: bestK, prob: bestProb, complete: bestComplete }
-        : null,
+      bestAt >= 0 ? { word: cs.words[bestAt], reward: rewards[bestAt], missing: bestK, prob: bestProb } : null,
   };
-}
-
-export interface CutoffInput {
-  auctionsLeft: number;
-  /** 1-based round, for prices. */
-  round: number;
-  balance: number;
-  rack: Rack;
-  target: TargetWord | null;
-}
-
-export interface Cutoff {
-  /** MIN_REWARD + (timeBar − MIN_REWARD) × affordShare, within [MIN_REWARD, BOMB_MIN_REWARD]. */
-  cutoff: number;
-  timeBar: number;
-  /** target reward × completion probability × affordShare (0 without a target). Logged only. */
-  holdValue: number;
-  /** Share of the target's missing-tile cost our balance covers, 0..1 (0 when broke, 1 without a target). */
-  affordShare: number;
-  /** Sum of p50 winning bids for the target's missing tiles. */
-  targetCost: number;
-}
-
-/**
- * The first word's sliding cutoff. Only time and coins lower the bar: the
- * time bar falls from 60 to 30 as the match runs, and the affordable share of
- * the target's missing-tile cost pulls it toward 30 (broke: 30). Raw
- * completion probabilities run low (live median target EV ~10), so they are
- * not used here; holdValue is computed for the logs only.
- */
-export function firstWordCutoff(c: CutoffInput): Cutoff {
-  const timeBar = timeBarFor(c.auctionsLeft);
-  let targetCost = 0;
-  for (const ch of targetMissing(c.target, c.rack)) {
-    let p = DEFAULT_TILE_PRICE;
-    try {
-      p = priceFor(ch, c.round, TARGET_COST_PCT);
-    } catch {
-      // no price data
-    }
-    targetCost += p;
-  }
-  const balance = Math.max(0, c.balance);
-  const affordShare = !c.target
-    ? 1
-    : balance <= BROKE_BALANCE
-      ? 0
-      : targetCost <= 0
-        ? 1
-        : Math.min(1, balance / targetCost);
-  const holdValue = c.target ? c.target.reward * c.target.complete * affordShare : 0;
-  const cutoff = clampCutoff(MIN_REWARD + (timeBar - MIN_REWARD) * affordShare);
-  return { cutoff, timeBar, holdValue, affordShare, targetCost };
 }
 
 /** A value table that also says which phase and target it was built for. */
 export interface PlanTable extends ValueTable {
   phase: PlayPhase;
-  /** Smallest word reward that counts in this phase (the cutoff before the first word). */
+  /** Smallest word reward that counts in this phase. */
   minReward: number;
   /** Per-letter floor applied (0 when the rack is not small). */
   floor: number;
   /** Long target word for the rack, if any. */
   target: TargetWord | null;
-  /** The first word's cutoff details (bomb phase only). */
-  cut: Cutoff | null;
 }
 
 export interface PlanContext extends Omit<ValueContext, "minReward"> {
   hasPlayedWord: boolean;
-  /** Our balance (for the cutoff's affordability). Default 100. */
-  balance?: number;
-  /** 1-based round (for prices). Default from auctionsLeft in a 68-auction match. */
-  round?: number;
 }
 
 /**
  * Letter values for the bidder: max of value.ts (near words that clear the
  * phase's reward bar) and targetValues (long words), with a floor on small
- * racks. Before the first word, the bar is the sliding cutoff, computed from
- * the target found here.
+ * racks.
  */
 export function planValues(ctx: PlanContext): PlanTable {
   const phase = playPhase(ctx.auctionsLeft, ctx.hasPlayedWord);
-  let target: TargetWord | null = null;
-  let floor = 0;
-  let cut: Cutoff | null = null;
-  let tvals: Float64Array | null = null;
-
-  if (phase !== "endgame" && ctx.auctionsLeft > 1) {
-    const bomb = phase === "bomb" && timeBarFor(ctx.auctionsLeft) >= BOMB_TARGET_MIN_BAR;
-    let tt = targetValues({ rack: ctx.rack, pool: ctx.pool, auctionsLeft: ctx.auctionsLeft, index: ctx.index, bomb });
-    // No bomb reachable: still value letters toward ordinary long words.
-    if (!tt.target && bomb)
-      tt = targetValues({ rack: ctx.rack, pool: ctx.pool, auctionsLeft: ctx.auctionsLeft, index: ctx.index, bomb: false });
-    target = tt.target;
-    tvals = tt.values;
-  }
-  if (phase === "bomb") {
-    cut = firstWordCutoff({
-      auctionsLeft: ctx.auctionsLeft,
-      round: ctx.round ?? Math.max(1, 69 - ctx.auctionsLeft),
-      balance: ctx.balance ?? 100,
-      rack: ctx.rack,
-      target,
-    });
-  }
-  const minReward = phase === "endgame" ? 0 : cut ? Math.round(cut.cutoff) : MIN_REWARD;
+  const minReward = minRewardFor(phase);
   // Letters won just before the endgame get played in the endgame dump.
   const nearEnd = ctx.auctionsLeft <= ENDGAME_AUCTIONS + VALUE_ENDGAME_LOOKAHEAD;
   const table = letterValues({ ...ctx, minReward: nearEnd ? 0 : minReward });
 
-  if (tvals) {
-    for (let i = 0; i < 26; i++) if (tvals[i] > table.values[i]) table.values[i] = tvals[i];
+  let target: TargetWord | null = null;
+  let floor = 0;
+  if (phase !== "endgame" && ctx.auctionsLeft > 1) {
+    const tt = targetValues({
+      rack: ctx.rack,
+      pool: ctx.pool,
+      auctionsLeft: ctx.auctionsLeft,
+      index: ctx.index,
+      bomb: minReward >= BOMB_MIN_REWARD,
+    });
+    // No bomb reachable: still value letters toward ordinary long words (the
+    // deadline will relax the bar to MIN_REWARD).
+    let tt2 = tt;
+    if (!tt.target && minReward >= BOMB_MIN_REWARD)
+      tt2 = targetValues({ rack: ctx.rack, pool: ctx.pool, auctionsLeft: ctx.auctionsLeft, index: ctx.index, bomb: false });
+    target = tt2.target;
+    for (let i = 0; i < 26; i++) if (tt2.values[i] > table.values[i]) table.values[i] = tt2.values[i];
+
     let tiles = 0;
     for (const [, n] of ctx.rack) tiles += n;
     if (tiles <= SMALL_RACK_TILES) {
@@ -419,7 +330,7 @@ export function planValues(ctx: PlanContext): PlanTable {
       for (let i = 0; i < 26; i++) if (table.values[i] < floor) table.values[i] = floor;
     }
   }
-  return { ...table, phase, minReward, floor, target, cut };
+  return { ...table, phase, minReward, floor, target };
 }
 
 /** Tiles of `target` not covered by `rack` ("" when no target). */

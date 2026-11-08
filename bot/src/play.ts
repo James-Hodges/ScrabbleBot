@@ -1,18 +1,17 @@
 // Play policy (S1-5, bomb rework): hold letters for big words.
 //
-// - Our first word of the match must clear a sliding cutoff (firstWordCutoff
-//   in target.ts): MIN_REWARD + (timeBar − MIN_REWARD) × affordShare.
-//   timeBar starts at BOMB_MIN_REWARD and falls linearly to MIN_REWARD
-//   between BOMB_FULL_AUCTIONS and BOMB_FLOOR_AUCTIONS auctions left;
-//   affordShare is how much of the target's missing-tile cost our balance
-//   covers. So a broke bot with a 30+ word in hand plays it (and refills
-//   coins) instead of waiting.
+// - Our first word of the match must be a "bomb": reward >= BOMB_MIN_REWARD
+//   (typically 8-10 letters with a high-value tile). With BOMB_DEADLINE_AUCTIONS
+//   or fewer auctions left the first-word bar drops to MIN_REWARD so we never
+//   hold forever.
 // - After the first word, play any word with reward >= MIN_REWARD.
-// - Never play a word under MIN_REWARD outside the endgame.
+// - Never play a word under MIN_REWARD outside the endgame. Being low on
+//   coins is not a reason to play a small word (the old refill rule is gone).
 // - Endgame (auctionsLeft <= ENDGAME_AUCTIONS): play the highest-total-reward
 //   set of words, any size.
 //
-// The decision depends on (rack, phase, cutoff); playGuard.ts keys on that.
+// The decision depends only on (rack, phase), where phase is
+// playPhase(auctionsLeft, hasPlayedWord); playGuard.ts relies on that.
 //
 // Pure: no I/O, no clock reads except the endgame search's time cap.
 
@@ -20,21 +19,10 @@ import { letterValue, rackCounts, type Rack, type WordIndex } from "./words.js";
 
 /** Outside the endgame, never play a word with a smaller reward. */
 export const MIN_REWARD = 30;
-/** The first word's cutoff never exceeds this (a "bomb"). */
+/** Until our first word lands, it must reward at least this much. */
 export const BOMB_MIN_REWARD = 60;
-/**
- * timeBar is BOMB_MIN_REWARD at or above this many auctions left (round ~19
- * of 68): the first ~18 auctions are enough to build an 8-10 letter word from
- * 5 starting tiles when the letters come; in the live early-bomb matches it
- * landed by then.
- */
-export const BOMB_FULL_AUCTIONS = 50;
-/**
- * timeBar reaches MIN_REWARD at this many auctions left (round ~44): leaves
- * ~10 auctions before the spend-down window (14) to use the refilled coins on
- * further 30+ words, instead of the old 20-auction deadline.
- */
-export const BOMB_FLOOR_AUCTIONS = 25;
+/** At or below this many auctions left (incl. the open one) the first word only needs MIN_REWARD. */
+export const BOMB_DEADLINE_AUCTIONS = 20;
 /** At or below this many auctions left (including the open one) it's the endgame. */
 export const ENDGAME_AUCTIONS = 3;
 
@@ -44,28 +32,23 @@ export const SET_BRANCHING = 12;
 export const SET_TIME_CAP_MS = 25;
 
 /**
- * - bomb: no word played yet (min reward = the sliding cutoff)
+ * - bomb: no word played yet, before the deadline (min reward BOMB_MIN_REWARD)
+ * - bomb_late: no word played yet, past the deadline (min reward MIN_REWARD)
  * - post_bomb: we have played a word (min reward MIN_REWARD)
  * - endgame: play everything (bestWordSet)
  */
-export type PlayPhase = "bomb" | "post_bomb" | "endgame";
+export type PlayPhase = "bomb" | "bomb_late" | "post_bomb" | "endgame";
 
 export function playPhase(auctionsLeft: number, hasPlayedWord: boolean): PlayPhase {
   if (auctionsLeft <= ENDGAME_AUCTIONS) return "endgame";
-  return hasPlayedWord ? "post_bomb" : "bomb";
+  if (hasPlayedWord) return "post_bomb";
+  return auctionsLeft <= BOMB_DEADLINE_AUCTIONS ? "bomb_late" : "bomb";
 }
 
-/** First-word bar from time alone: 60 early, linear down to 30 at BOMB_FLOOR_AUCTIONS. */
-export function timeBar(auctionsLeft: number): number {
-  if (auctionsLeft >= BOMB_FULL_AUCTIONS) return BOMB_MIN_REWARD;
-  if (auctionsLeft <= BOMB_FLOOR_AUCTIONS) return MIN_REWARD;
-  const t = (auctionsLeft - BOMB_FLOOR_AUCTIONS) / (BOMB_FULL_AUCTIONS - BOMB_FLOOR_AUCTIONS);
-  return MIN_REWARD + t * (BOMB_MIN_REWARD - MIN_REWARD);
-}
-
-/** Clamp a first-word cutoff to [MIN_REWARD, BOMB_MIN_REWARD]. */
-export function clampCutoff(cutoff: number): number {
-  return Math.min(BOMB_MIN_REWARD, Math.max(MIN_REWARD, cutoff));
+/** Smallest reward a word may have to be played in `phase` (0 in the endgame). */
+export function minRewardFor(phase: PlayPhase): number {
+  if (phase === "endgame") return 0;
+  return phase === "bomb" ? BOMB_MIN_REWARD : MIN_REWARD;
 }
 
 export interface PlayContext {
@@ -74,31 +57,25 @@ export interface PlayContext {
   auctionsLeft: number;
   /** Whether we have already played a word this match (default false). */
   hasPlayedWord?: boolean;
-  /**
-   * First-word cutoff (firstWordCutoff in target.ts). Default timeBar(auctionsLeft).
-   * Always clamped to [MIN_REWARD, BOMB_MIN_REWARD].
-   */
-  cutoff?: number;
   index: WordIndex;
 }
 
 /** The word(s) to play now, in order. Empty means hold. */
 export function choosePlay(ctx: PlayContext): string[] {
   const { index } = ctx;
-  const phase = playPhase(ctx.auctionsLeft, ctx.hasPlayedWord ?? false);
+  let phase = playPhase(ctx.auctionsLeft, ctx.hasPlayedWord ?? false);
   if (phase === "endgame") return bestWordSet(ctx.rack, index);
 
-  let bar = phase === "bomb" ? clampCutoff(ctx.cutoff ?? timeBar(ctx.auctionsLeft)) : MIN_REWARD;
   const rack = new Map(ctx.rack);
   const plays: string[] = [];
-  // Highest-reward word first, as long as it clears the bar. Once one lands
-  // we are post-bomb, so later words only need MIN_REWARD.
+  // Highest-reward word first, as long as it clears the phase's bar. Once
+  // one lands we are post-bomb, so later words only need MIN_REWARD.
   for (;;) {
     const best = index.best(rack);
-    if (!best || best.reward < bar) break;
+    if (!best || best.reward < minRewardFor(phase)) break;
     plays.push(best.word);
     removeWord(rack, best.word);
-    bar = MIN_REWARD;
+    phase = "post_bomb";
   }
   return plays;
 }

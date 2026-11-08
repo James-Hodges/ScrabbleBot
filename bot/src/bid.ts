@@ -56,7 +56,7 @@ export interface RawBidContext {
   /** Optional WordIndex to perform exact word-completion checks. */
   index?: WordIndex;
   /**
-   * Smallest word reward we would play now (planValues' minReward: the first-word cutoff, MIN_REWARD after it). Bingo and
+   * Smallest word reward we would play now (play.ts minRewardFor). Bingo and
    * snowball completions below it don't count. Default 0.
    */
   minReward?: number;

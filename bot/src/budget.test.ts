@@ -2,21 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  applyBudget,
-  BOMB_BELOW_FLOOR_SHARE,
-  BOMB_FLOOR_MIN_RACK,
-  BOMB_FLOOR_ROUND,
-  BOMB_KEEP_COINS,
-  BOMB_LETTER_SHARE,
-  BOMB_MARKET_PCT,
-  BOMB_NEAR_SHARE,
-  bombCap,
-  SPEND_DOWN_AUCTIONS,
-  TARGET_LEFTOVER,
-  type BombBidInput,
-  type BudgetContext,
-} from "./budget.js";
+import { applyBudget, SPEND_DOWN_AUCTIONS, TARGET_LEFTOVER, type BudgetContext } from "./budget.js";
 import { priceFor } from "./prices.js";
 
 const TOTAL = 68;
@@ -94,81 +80,5 @@ test("simulated tail finishes with ≤ 10 coins and skips the last auction", () 
       }
     }
     assert.ok(balance <= TARGET_LEFTOVER, `offset ${offset}: left ${balance}, won ${log.join(" ")}`);
-  }
-});
-
-// ---- Bomb-phase spending discipline ----
-
-const early = { isLastAuction: false, auctionsLeft: 60, round: 9, myBalance: 100 };
-const far: BombBidInput = { missing: "OZEXS", targetOk: true, completes: false };
-
-test("bomb phase: an early 100-coin balance never bids above the per-letter cap", () => {
-  for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-    const cap = Math.floor(Math.min(100 * BOMB_LETTER_SHARE, priceFor(letter, 9, BOMB_MARKET_PCT)));
-    for (const raw of [5, 20, 40, 90]) {
-      const r = applyBudget(raw, { ...early, letter, bomb: far });
-      assert.ok(r.amount <= cap, `${letter} raw ${raw} -> ${r.amount} > ${cap}`);
-      if (raw > cap) assert.equal(r.reason, "bomb_cap");
-    }
-  }
-});
-
-test("bomb phase: the coin floor holds until the target is near-complete", () => {
-  // 30 coins, target 5 tiles away, floor armed (no rackTiles given): keep BOMB_KEEP_COINS.
-  const b = { ...early, myBalance: 30, letter: "S" };
-  const r = applyBudget(30, { ...b, bomb: far });
-  assert.equal(r.amount, Math.max(30 - BOMB_KEEP_COINS, Math.floor(30 * BOMB_BELOW_FLOOR_SHARE)));
-  assert.equal(r.reason, "bomb_floor");
-  // Below the floor we still bid a little instead of 0.
-  const low = applyBudget(30, { ...b, myBalance: 20, bomb: far });
-  assert.equal(low.reason, "bomb_floor");
-  assert.equal(low.amount, Math.floor(20 * BOMB_BELOW_FLOOR_SHARE));
-  assert.ok(low.amount > 0);
-  // Target within 2 tiles: no floor, only the per-letter cap.
-  const nearTarget: BombBidInput = { missing: "XS", targetOk: true, completes: false };
-  const r2 = applyBudget(30, { ...b, letter: "E", bomb: nearTarget });
-  assert.equal(r2.amount, Math.floor(Math.min(30 * BOMB_LETTER_SHARE, priceFor("E", 9, BOMB_MARKET_PCT))));
-});
-
-test("bomb phase: the coin floor is not armed on a small rack early (no stall)", () => {
-  const b = { ...early, myBalance: 30, letter: "S" };
-  const cap = Math.floor(Math.min(30 * BOMB_LETTER_SHARE, priceFor("S", 9, BOMB_MARKET_PCT)));
-  assert.ok(cap > 30 - BOMB_KEEP_COINS);
-  // Small rack, early round: only the per-letter cap.
-  const small = applyBudget(30, { ...b, bomb: { ...far, rackTiles: BOMB_FLOOR_MIN_RACK - 1 } });
-  assert.equal(small.amount, cap);
-  assert.notEqual(small.reason, "bomb_floor");
-  // Big rack: the floor binds.
-  const big = applyBudget(30, { ...b, bomb: { ...far, rackTiles: BOMB_FLOOR_MIN_RACK } });
-  assert.equal(big.reason, "bomb_floor");
-  assert.equal(big.amount, Math.max(30 - BOMB_KEEP_COINS, Math.floor(30 * BOMB_BELOW_FLOOR_SHARE)));
-  // Late round: the floor binds even on a small rack.
-  const late = applyBudget(30, { ...b, round: BOMB_FLOOR_ROUND, auctionsLeft: 69 - BOMB_FLOOR_ROUND, bomb: { ...far, rackTiles: 6 } });
-  assert.equal(late.reason, "bomb_floor");
-});
-
-test("bomb phase: a letter that nearly completes the target can exceed the normal cap", () => {
-  const near: BombBidInput = { missing: "XES", targetOk: true, completes: false };
-  const normalCap = Math.floor(Math.min(100 * BOMB_LETTER_SHARE, priceFor("X", 9, BOMB_MARKET_PCT)));
-  const r = applyBudget(45, { ...early, letter: "X", bomb: near });
-  assert.ok(r.amount > normalCap, `${r.amount} vs ${normalCap}`);
-  assert.equal(r.amount, 45);
-  const big = applyBudget(90, { ...early, letter: "X", bomb: near });
-  assert.equal(big.amount, Math.floor(100 * BOMB_NEAR_SHARE));
-  assert.equal(big.reason, "bomb_near");
-  // A completing word counts as near even without a target.
-  const done = bombCap(40, 100, "Q", 9, { missing: "", targetOk: false, completes: true });
-  assert.equal(done.amount, 40);
-  // A target that doesn't clear the cutoff doesn't unlock the higher cap.
-  const weak = applyBudget(45, { ...early, letter: "X", bomb: { ...near, targetOk: false } });
-  assert.ok(weak.amount <= normalCap);
-});
-
-test("post-bomb and spend-down bids are unchanged by the bomb rules", () => {
-  for (const raw of [5, 20, 40]) {
-    const post = applyBudget(raw, { ...early, letter: "E" });
-    assert.deepEqual(post, { amount: raw, reason: "normal", pace: 100 / 59 });
-    const late = { isLastAuction: false, auctionsLeft: 10, round: 59, myBalance: 100, letter: "E" };
-    assert.deepEqual(applyBudget(raw, { ...late, bomb: far }), applyBudget(raw, late));
   }
 });
