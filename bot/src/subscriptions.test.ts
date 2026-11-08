@@ -19,10 +19,14 @@ test("sqlTimestamp keeps microseconds", () => {
 test("queries filter on our bot id", () => {
   for (const q of coreQueries(42n)) assert.match(q, /bot_id = 42\b/);
   const live = liveQueries(42n, 1_000_001n);
-  assert.equal(live.length, 3);
+  assert.equal(live.length, 4);
   for (const q of live) {
-    assert.match(q, /bot_id = 42\b/);
     assert.match(q, /> '1970-01-01T00:00:01\.000001Z'$/);
+  }
+  for (const q of live.slice(0, 3)) assert.match(q, /bot_id = 42\b/);
+  // No match_participant self-join: it doesn't deliver opponents' updates.
+  for (const q of [...coreQueries(42n), ...live]) {
+    assert.doesNotMatch(q, /match_participant \w+ JOIN match_participant/);
   }
 });
 

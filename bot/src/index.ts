@@ -119,6 +119,9 @@ function participantsSummary(conn: DbConnection, matchId: bigint) {
 }
 
 function noteMatchStart(conn: DbConnection, matchId: bigint) {
+  // Opponents' participant rows come with the live subscription; wait for
+  // it so the start log lists everyone (bootstrapActivity catches up).
+  if (!liveReady) return;
   const key = String(matchId);
   if (startedMatches.has(key)) return;
   const m = conn.db.matchState.id.find(matchId);
@@ -441,6 +444,7 @@ function subscribeToOurMatches(conn: DbConnection) {
         console.log(
           `[${BOT_NAME}] live subscription applied (${Date.now() - start} ms, ${rssMb()} MB rss)`,
         );
+        liveReady = true;
         bootstrapActivity(conn);
       });
     })
@@ -469,6 +473,7 @@ function ourMatchTimes(conn: DbConnection): MatchTimes[] {
 // there's no gap; rows in both are reference-counted by the SDK and don't
 // fire onInsert again.
 let liveHandle: SubscriptionHandle | null = null;
+let liveReady = false;
 function subscribeLive(conn: DbConnection, onReady?: () => void) {
   if (myBotId === null) return;
   const prev = liveHandle;

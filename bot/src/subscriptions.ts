@@ -5,18 +5,24 @@
 // Three query sets, added in order:
 //
 //   base  (on connect)        our credential, bot names, our rack.
-//   core  (bot id known)      our matches' states and all their
-//                             participants, our lobby memberships and
-//                             those lobbies. One row or so per match we've
-//                             played, so it grows slowly.
+//   core  (bot id known)      our participant rows and our matches'
+//                             states, our lobby memberships and those
+//                             lobbies. A few rows per match we've played,
+//                             so it grows slowly.
 //   live  (after core)        auctions, auction results and word plays of
-//                             our matches, newer than a floor timestamp.
+//                             our matches, and all participants of matches
+//                             created, newer than a floor timestamp.
 //
 // Everything is a join on match_participant WHERE bot_id = <us>, so a new
 // match's rows (its first auction included) arrive in the same transaction
 // as our participant row: no client round trip before we can bid.
 //
-// The live set is the one that grows (~150 rows per match), so after each
+// Don't use a match_participant self-join (p JOIN q ON match_id WHERE
+// q.bot_id = us): the server sends its initial rows but no later updates
+// to other bots' rows, so opponents' scores stay at 0 (seen in match 43190).
+//
+// The live set is the one that grows (~150 rows per match of ours, plus
+// ~6 per other match created while we wait in the lobby), so after each
 // of our matches ends it is replaced by one whose floor is that match's
 // end time; unsubscribing the old set drops the ended match's rows.
 //
@@ -35,7 +41,7 @@ export function baseQueries(): string[] {
 export function coreQueries(botId: bigint): string[] {
   const b = botId.toString();
   return [
-    `SELECT p.* FROM match_participant p JOIN match_participant q ON p.match_id = q.match_id WHERE q.bot_id = ${b}`,
+    `SELECT * FROM match_participant WHERE bot_id = ${b}`,
     `SELECT m.* FROM match_state m JOIN match_participant p ON m.id = p.match_id WHERE p.bot_id = ${b}`,
     `SELECT * FROM lobby_member WHERE bot_id = ${b}`,
     `SELECT l.* FROM lobby l JOIN lobby_member lm ON l.id = lm.lobby_id WHERE lm.bot_id = ${b}`,
@@ -49,6 +55,10 @@ export function liveQueries(botId: bigint, sinceMicros: bigint): string[] {
     `SELECT a.* FROM auction a JOIN match_participant p ON a.match_id = p.match_id WHERE p.bot_id = ${b} AND a.closes_at > '${t}'`,
     `SELECT r.* FROM auction_result r JOIN match_participant p ON r.match_id = p.match_id WHERE p.bot_id = ${b} AND r.closed_at > '${t}'`,
     `SELECT w.* FROM word_play w JOIN match_participant p ON w.match_id = p.match_id WHERE p.bot_id = ${b} AND w.played_at > '${t}'`,
+    // Every participant of matches created after the floor (all matches on
+    // the server, not just ours: joins are limited to two tables and a
+    // match_participant self-join only sends updates for our own row).
+    `SELECT p.* FROM match_participant p JOIN match_state m ON p.match_id = m.id WHERE m.created_at > '${t}'`,
   ];
 }
 
