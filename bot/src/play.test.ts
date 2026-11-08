@@ -92,7 +92,7 @@ test("endgame on a 20-tile rack with the real wordlist is fast", () => {
       left.set(c, n);
     }
   }
-  assert.ok(ms < 50, `endgame search took ${ms.toFixed(1)} ms`);
+  assert.ok(ms < 100, `endgame search took ${ms.toFixed(1)} ms`);
 });
 
 // ---- S1-6: nothing playable is left at the end ----

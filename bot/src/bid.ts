@@ -20,6 +20,7 @@
 
 import { priceFor, type Pct } from "./prices.js";
 import type { ValueTable } from "./value.js";
+import type { Rack, WordIndex } from "./words.js";
 
 /** Coins of bid per expected point of value (winners: ~225 coins → ~161 points). */
 export const COINS_PER_POINT = 1.4;
@@ -47,6 +48,10 @@ export interface RawBidContext {
   prices?: (letter: string, round: number, pct: Pct) => number;
   /** The letter finishes a dictionary word with the current rack. */
   completesWord?: boolean;
+  /** Optional rack to perform exact leave and bingo checks. */
+  rack?: Rack;
+  /** Optional WordIndex to perform exact word-completion checks. */
+  index?: WordIndex;
 }
 
 export type RawBidReason =
@@ -54,7 +59,9 @@ export type RawBidReason =
   | "no_balance"
   | "ceiling" // value-limited
   | "market" // capped by the price table
-  | "balance"; // capped by our balance
+  | "balance" // capped by our balance
+  | "completes_bingo" // completes a 7+ letter word right now
+  | "completes_snowball"; // completes an early 5+ letter word for cash
 
 export interface RawBid {
   amount: number;
@@ -69,6 +76,8 @@ export interface RawBid {
 }
 
 const A = 65;
+const VOWELS = new Set(["A", "E", "I", "O", "U"]);
+const HIGH_SYNERGY = new Set(["S", "E", "R", "T", "I", "N", "A"]);
 
 function valueFor(values: ValueTable | Float64Array, letter: string): number {
   const arr = values instanceof Float64Array ? values : values.values;
@@ -85,28 +94,127 @@ export function pctFor(ceiling: number, p50: number, completesWord = false): Pct
   return pct;
 }
 
+/** Check if adding letter to rack completes a 7+ letter playable word not already spellable. */
+export function completesBingo(
+  rack: Rack,
+  letter: string,
+  index: WordIndex,
+): { word: string; reward: number } | null {
+  const L = letter.toUpperCase();
+  const next = new Map(rack);
+  next.set(L, (next.get(L) ?? 0) + 1);
+  const bestWith = index.best(next, { minLen: 7 });
+  if (!bestWith) return null;
+  const bestWithout = index.best(rack, { minLen: 7 });
+  if (!bestWithout || bestWith.reward > bestWithout.reward) {
+    return bestWith;
+  }
+  return null;
+}
+
+/** Check if adding letter to rack completes a 5+ letter word for early cash snowball. */
+export function completesSnowball(
+  rack: Rack,
+  letter: string,
+  index: WordIndex,
+  balance: number,
+  round: number,
+): { word: string; reward: number } | null {
+  if (round > 25 && balance >= 35) return null;
+  const bestWithout = index.best(rack, { minLen: 5 });
+  if (bestWithout && balance >= 35) return null;
+
+  const L = letter.toUpperCase();
+  const next = new Map(rack);
+  next.set(L, (next.get(L) ?? 0) + 1);
+  const bestWith = index.best(next, { minLen: 5 });
+  if (!bestWith) return null;
+  if (!bestWithout || bestWith.reward > bestWithout.reward) {
+    return bestWith;
+  }
+  return null;
+}
+
 export function rawBid(ctx: RawBidContext): RawBid {
-  const value = valueFor(ctx.values, ctx.letter);
-  const ceiling = value * COINS_PER_POINT;
   const balance = Math.max(0, Math.floor(ctx.balance));
   const lookup = ctx.prices ?? priceFor;
   const price = (pct: Pct): number => {
     try {
       return lookup(ctx.letter, ctx.round, pct);
     } catch {
-      return Infinity; // unknown letter: value alone decides
+      return Infinity;
     }
   };
+
+  if (balance <= 0) {
+    const value = valueFor(ctx.values, ctx.letter);
+    return { amount: 0, value, ceiling: value * COINS_PER_POINT, marketCap: price(BASE_PCT), pct: BASE_PCT, reason: "no_balance" };
+  }
+
+  const bingo = ctx.rack && ctx.index ? completesBingo(ctx.rack, ctx.letter, ctx.index) : null;
+  const snowball = ctx.rack && ctx.index ? completesSnowball(ctx.rack, ctx.letter, ctx.index, balance, ctx.round) : null;
+  const isCompleter = Boolean(ctx.completesWord || bingo || snowball);
+
+  let value = valueFor(ctx.values, ctx.letter);
+
+  // If rack is available, adjust value for immediate rewards and synergy:
+  if (ctx.rack) {
+    const L = ctx.letter.toUpperCase();
+    if (bingo) {
+      value = Math.max(value, bingo.reward * 0.9);
+    } else if (snowball) {
+      value = Math.max(value, snowball.reward * 0.8);
+    } else {
+      let totalTiles = 0;
+      let vowelCount = 0;
+      for (const [ch, count] of ctx.rack) {
+        totalTiles += count;
+        if (VOWELS.has(ch)) vowelCount += count;
+      }
+      const isVowel = VOWELS.has(L);
+      const vowelRatio = totalTiles > 0 ? vowelCount / totalTiles : 0.4;
+      const copiesHave = ctx.rack.get(L) ?? 0;
+
+      if (copiesHave >= 2 && value < 1.0) {
+        return { amount: 0, value: 0, ceiling: 0, marketCap: price(BASE_PCT), pct: BASE_PCT, reason: "no_value" };
+      }
+
+      let synergy = 0;
+      if (copiesHave === 0 && HIGH_SYNERGY.has(L)) synergy += 3.5;
+      if (isVowel) {
+        if (vowelRatio < 0.30) synergy += 4.0;
+        else if (vowelRatio > 0.50) synergy -= 3.0;
+      } else {
+        if (vowelRatio > 0.60) synergy += 4.0;
+        else if (vowelRatio < 0.20) synergy -= 3.0;
+      }
+      if (copiesHave === 1 && !["E", "A", "I", "O", "R", "S", "T", "N"].includes(L)) {
+        synergy -= 3.0;
+      }
+      value = Math.max(0, value + synergy);
+    }
+  }
+
+  const ceiling = value * COINS_PER_POINT;
 
   if (!(value >= MIN_VALUE_POINTS)) {
     return { amount: 0, value, ceiling, marketCap: price(BASE_PCT), pct: BASE_PCT, reason: "no_value" };
   }
-  const pct = pctFor(ceiling, price(50), ctx.completesWord);
+
+  const pct = pctFor(ceiling, price(50), isCompleter);
   const marketCap = price(pct);
-  if (balance <= 0) return { amount: 0, value, ceiling, marketCap, pct, reason: "no_balance" };
 
   let amount = Math.round(Math.min(ceiling, marketCap));
   let reason: RawBidReason = ceiling <= marketCap ? "ceiling" : "market";
+
+  if (bingo) {
+    reason = "completes_bingo";
+    amount = Math.max(amount, price(90));
+  } else if (snowball) {
+    reason = "completes_snowball";
+    amount = Math.max(amount, price(75));
+  }
+
   if (amount > balance) {
     amount = balance;
     reason = "balance";

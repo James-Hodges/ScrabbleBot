@@ -11,8 +11,10 @@ import { letterValue, rackCounts, type Rack, type WordIndex } from "./words.js";
 
 /** Words at least this long are played as soon as possible. */
 export const LONG_WORD_LEN = 7;
-/** Below this balance we play a word to refill coins. */
-export const LOW_BALANCE = 15;
+/** Below this balance we play a word to refill coins (dynamic by match phase). */
+export const LOW_BALANCE = 20;
+export const EARLY_REFILL_BALANCE = 35;
+export const MID_REFILL_BALANCE = 25;
 /** Minimum length preferred for a coin-refill word (falls back to any word). */
 export const REFILL_MIN_LEN = 4;
 /** At or below this many auctions left (including the open one) it's the endgame. */
@@ -30,6 +32,13 @@ export interface PlayContext {
   /** Auctions left in the match, including the currently open one. */
   auctionsLeft: number;
   index: WordIndex;
+}
+
+/** Threshold below which we play a word to refill coins. */
+export function refillThreshold(auctionsLeft: number): number {
+  if (auctionsLeft > 43) return EARLY_REFILL_BALANCE; // rounds 1-25
+  if (auctionsLeft > 13) return MID_REFILL_BALANCE;   // rounds 26-55
+  return LOW_BALANCE;
 }
 
 /** The word(s) to play now, in order. Empty means hold. */
@@ -50,10 +59,31 @@ export function choosePlay(ctx: PlayContext): string[] {
     removeWord(rack, long.word);
   }
 
-  // Short of coins: one word to refill, preferring 4+ letters.
-  if (balance < LOW_BALANCE) {
-    const refill = index.best(rack, { minLen: REFILL_MIN_LEN }) ?? index.best(rack);
-    if (refill) plays.push(refill.word);
+  // Short of coins: one word to refill, preferring 5+ then 4+ letters.
+  const threshold = refillThreshold(ctx.auctionsLeft);
+  if (balance < threshold) {
+    const refill =
+      index.best(rack, { minLen: 5 }) ??
+      index.best(rack, { minLen: REFILL_MIN_LEN }) ??
+      index.best(rack);
+    if (refill) {
+      plays.push(refill.word);
+      balance += refill.reward;
+      removeWord(rack, refill.word);
+    }
+  }
+
+  // Cluttered rack safeguard: if rack has 9+ tiles and cannot spell 7+ letter words,
+  // play a high-reward 6-letter word to prevent gridlock.
+  let tileCount = 0;
+  for (const [, n] of rack) tileCount += n;
+  if (tileCount >= 9) {
+    const declutter = index.best(rack, { minLen: 6 });
+    if (declutter && declutter.reward >= 20) {
+      plays.push(declutter.word);
+      balance += declutter.reward;
+      removeWord(rack, declutter.word);
+    }
   }
 
   return plays;
@@ -70,20 +100,37 @@ export function bestWordSet(rack: Rack, index: WordIndex): string[] {
   // this one scan is the complete candidate list for the whole search.
   const cands = index.playable(rack);
   if (cands.length === 0) return [];
-  const words = cands.map((c) => c.word);
-  const rewards = cands.map((c) => c.reward);
-  const counts = cands.map((c) => wordCounts(c.word));
   const n = cands.length;
+  const words = new Array<string>(n);
+  const rewards = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    words[i] = cands[i].word;
+    rewards[i] = cands[i].reward;
+  }
+
+  // Lazy-allocate word count vectors on demand to eliminate 25,000+ GC allocations.
+  const countCache = new Array<Uint8Array | undefined>(n);
+  const getCounts = (k: number): Uint8Array => {
+    let c = countCache[k];
+    if (!c) {
+      c = new Uint8Array(26);
+      const w = words[k];
+      for (let i = 0; i < w.length; i++) c[w.charCodeAt(i) - 65]++;
+      countCache[k] = c;
+    }
+    return c;
+  };
 
   const fits = (k: number, rc: Uint8Array): boolean => {
-    const wc = counts[k];
+    const wc = getCounts(k);
     for (let i = 0; i < 26; i++) if (wc[i] > rc[i]) return false;
     return true;
   };
   const take = (k: number, rc: Uint8Array, sign: 1 | -1) => {
-    const wc = counts[k];
+    const wc = getCounts(k);
     for (let i = 0; i < 26; i++) rc[i] -= sign * wc[i];
   };
+
   // Upper bound on what the remaining tiles could still earn: every tile
   // at the 3x multiplier.
   const values = new Array<number>(26);
@@ -121,7 +168,7 @@ export function bestWordSet(rack: Rack, index: WordIndex): string[] {
     }
     if (picks.length >= SET_MAX_WORDS || timedOut) return;
     if (total + bound(rc) <= bestTotal) return;
-    if ((++nodes & 255) === 0 && performance.now() > deadline) {
+    if ((++nodes & 63) === 0 && performance.now() > deadline) {
       timedOut = true;
       return;
     }

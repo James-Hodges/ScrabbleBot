@@ -218,7 +218,7 @@ function tryBid(
   // S2-2: letter values. unseenPool already counts the open auction's letter
   // as seen, so poolIncludesLetter stays unset.
   const table = valueTableFor(matchId, state);
-  // S2-3: min(value ceiling, market cap).
+  // S2-3: market-anchored bid with bingo & early snowball detection.
   const bid = decideRawBid({
     letter,
     values: table,
@@ -226,6 +226,8 @@ function tryBid(
     auctionsLeft: state.auctionsLeft,
     round: state.round,
     completesWord: completesTarget(table, rack, letter),
+    rack,
+    index: WORD_INDEX,
   });
   const rawBid = bid.amount;
   // S2-4/S2-5: spend-down pace and never bidding on the last auction.

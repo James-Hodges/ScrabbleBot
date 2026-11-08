@@ -17,14 +17,14 @@
 //
 // Pure: no I/O.
 
-import { ENDGAME_AUCTIONS, LOW_BALANCE } from "./play.js";
+import { ENDGAME_AUCTIONS, refillThreshold } from "./play.js";
 import type { Rack } from "./words.js";
 
 export type PlayPhase = "endgame" | "refill" | "normal";
 
 export function playPhase(auctionsLeft: number, balance: number): PlayPhase {
   if (auctionsLeft <= ENDGAME_AUCTIONS) return "endgame";
-  if (balance < LOW_BALANCE) return "refill";
+  if (balance < refillThreshold(auctionsLeft)) return "refill";
   return "normal";
 }
 

@@ -103,7 +103,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S2-3 | Bid formula | James | [x] |
 | S2-4 | Spend down coins | ooVrq (live check: James) | [x] |
 | S2-5 | Skip the last auction | ooVrq (live check: James) | [x] |
-| S2-6 | Early coin snowball | | [ ] |
+| S2-6 | Early coin snowball | Antigravity | [x] |
 | S3-1 | Benchmark script | ooVrq | [x] |
 | S3-2 | Tune bid and play numbers | | [ ] |
 | S3-3 | Tag a version only when better | | [ ] |

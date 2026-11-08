@@ -5,6 +5,8 @@ import { test } from "node:test";
 import {
   COINS_PER_POINT,
   MIN_VALUE_POINTS,
+  completesBingo,
+  completesSnowball,
   completesTarget,
   pctFor,
   rawBid,
@@ -170,4 +172,47 @@ test("whole decision (letterValues + rawBid) is fast on a 20-tile rack", () => {
   }
   console.log(`  20-tile decision: ${times.map((t) => t.toFixed(1)).join(", ")} ms`);
   assert.ok(Math.max(...times) < 50, `slowest ${Math.max(...times).toFixed(1)} ms`);
+});
+
+test("completesBingo spots 7-letter words and bids p90", () => {
+  const r = rack("TISANE");
+  const bingoR = completesBingo(r, "R", index);
+  assert.ok(bingoR !== null);
+  assert.equal(bingoR.reward >= 21, true);
+
+  const table = letterValues({ rack: r, pool: pool("TISANE"), auctionsLeft: 45, index });
+  const b = rawBid({
+    letter: "R",
+    values: table,
+    balance: 100,
+    auctionsLeft: 45,
+    round: 23,
+    rack: r,
+    index,
+  });
+  assert.equal(b.reason, "completes_bingo");
+  assert.equal(b.pct, 90);
+  assert.ok(b.amount >= 14, `bid was ${b.amount}`);
+});
+
+test("completesSnowball detects early 5-letter word when balance is low", () => {
+  const r = rack("CARE");
+  const snowballS = completesSnowball(r, "S", index, 25, 10);
+  assert.ok(snowballS !== null);
+  assert.equal(snowballS.word.length, 5);
+  assert.ok(["ACRES", "CARES", "RACES", "SCARE"].includes(snowballS.word));
+
+  const table = letterValues({ rack: r, pool: pool("CARE"), auctionsLeft: 58, index });
+  const b = rawBid({
+    letter: "S",
+    values: table,
+    balance: 25,
+    auctionsLeft: 58,
+    round: 10,
+    rack: r,
+    index,
+  });
+  assert.equal(b.reason, "completes_snowball");
+  assert.equal(b.pct, 75);
+  assert.ok(b.amount >= 12, `bid was ${b.amount}`);
 });
