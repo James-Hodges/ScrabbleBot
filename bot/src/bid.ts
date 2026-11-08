@@ -22,8 +22,11 @@ import { priceFor, type Pct } from "./prices.js";
 import type { ValueTable } from "./value.js";
 import type { Rack, WordIndex } from "./words.js";
 
-/** Coins of bid per expected point of value (winners: ~225 coins → ~161 points). */
-export const COINS_PER_POINT = 1.4;
+/**
+ * Coins of bid per expected point of value. 2.3 tested best on main (S3-2:
+ * average place 3.00 vs 6.0 at 1.4, 9 live matches; see PLAN.md tuning log).
+ */
+export const COINS_PER_POINT = 2.3;
 /** Below this many expected points a letter is unusable to us: bid 0. */
 export const MIN_VALUE_POINTS = 0.5;
 /** Default market percentile. */
