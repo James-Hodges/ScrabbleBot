@@ -229,3 +229,4 @@ Record each change made during Sprint 3 here.
 |---|---|---|---|---|---|---|
 | 16:20 | Baseline: S2-3 bid formula, `COINS_PER_POINT` 1.4 | 1 (45094) | 6.0 | 8 | 33 | 40 pts. Value ceiling set 62 of 64 bids. |
 | 16:40 | `COINS_PER_POINT` 1.4 → 2.3 (`8cc98c4`) | 9 (45120–45173) | 3.00 | 13.1 | 27.7 | 88.9 pts, 22% wins, 1.44 words of 7+, 12.3 coins/tile. Ceiling-bound bids (60% of bids) win only 8%; market-capped 39%; spend-down 44%. Win rate by phase: rounds 1–20 9%, 21–54 21%, 55–67 44%. Kept. |
+| 17:00 | S2-6 early boost: ceiling ×1.5 in rounds 1–20 until our first 5+ word (`4c4cda8`) | 9 (45232–45294) | 3.33 | 10.1 | 26.4 | 69.9 pts, 11% wins, 0.89 words of 7+, 14.2 coins/tile. Early win rate rose 9% → 25% and the first 5+ word came earlier (median round ~14), but mid-match fell 21% → 11% and late 44% → 20%; 28 spend-down bids had no surplus. Early overspending starves the rest of the match. Worse overall. |
