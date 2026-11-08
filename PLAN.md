@@ -227,4 +227,4 @@ Record each change made during Sprint 3 here.
 
 | Time | Change | Matches | Avg place | Tiles won | Coins left | Notes |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| 2026-11-08 02:54Z | `improved-bot` + bomb-first play (ce28f44): first word 60+ (30+ after 20 auctions left), then 30+ only, target-word bidding, 6-coin reserve per missing target tile | 10 (46141–46296) | 2.80 | 14.5 | 20.3 | 1 win (10%), score 89.4, 11.7 coins/tile, 1.4 7+ words. Compare `main` at 2.3: 3.00 / 22% / 13.1 tiles / 28 left. 60+ word early in 5 of 10 → never worse than 3rd (2,2,2,2,3); deadline fallback in 5 → avg 3.4. Gap after the first word: often no second 30+ word until the endgame. |
