@@ -7,7 +7,8 @@
 //
 // Pure: no I/O, no clock reads except the endgame search's time cap.
 
-import { letterValue, rackCounts, type Rack, type WordIndex } from "./words.js";
+import { letterValue, rackCounts, type Rack, type WordIndex, wordReward } from "./words.js";
+import { canSpell } from "./target.js";
 
 /** Words at least this long are played as soon as possible. */
 export const LONG_WORD_LEN = 7;
@@ -30,11 +31,36 @@ export interface PlayContext {
   /** Auctions left in the match, including the currently open one. */
   auctionsLeft: number;
   index: WordIndex;
+  /** Active target word, if chasing one and not yet played. */
+  targetWord?: string | null;
 }
 
 /** The word(s) to play now, in order. Empty means hold. */
 export function choosePlay(ctx: PlayContext): string[] {
   const { index } = ctx;
+
+  // If we have an active target word we are forcing:
+  if (ctx.targetWord) {
+    if (canSpell(ctx.rack, ctx.targetWord)) {
+      const plays = [ctx.targetWord];
+      const remainingRack = new Map(ctx.rack);
+      removeWord(remainingRack, ctx.targetWord);
+      // If in endgame, also dump remaining tiles
+      if (ctx.auctionsLeft <= ENDGAME_AUCTIONS) {
+        plays.push(...bestWordSet(remainingRack, index));
+      }
+      return plays;
+    }
+    // Target word not spellable yet:
+    // In endgame, if target could not be made, dump best playable words.
+    if (ctx.auctionsLeft <= ENDGAME_AUCTIONS) {
+      return bestWordSet(ctx.rack, index);
+    }
+    // Otherwise hold our tiles to preserve the target word pieces!
+    return [];
+  }
+
+  // Free play (no active target word or target already played):
   if (ctx.auctionsLeft <= ENDGAME_AUCTIONS) return bestWordSet(ctx.rack, index);
 
   const rack = new Map(ctx.rack);

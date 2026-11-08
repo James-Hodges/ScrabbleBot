@@ -13,6 +13,7 @@ import {
   pctFor,
   playedLongWord,
   rawBid,
+  targetBid,
   type RawBidContext,
 } from "./bid.js";
 import { TILE_SET } from "./pool.js";
@@ -302,4 +303,66 @@ test("simulated early bids: boosted vs unboosted (real values and prices)", () =
     `  early sim: ${n} auctions, ${nBid} bid, ${boosted} boosted (${near} near-target); ` +
       `avg bid ${(sumOld / n).toFixed(1)} → ${(sumNew / n).toFixed(1)} coins (+${(((sumNew - sumOld) / Math.max(1, sumOld)) * 100).toFixed(0)}%)`,
   );
+});
+
+test("targetBid: bids aggressively on needed tiles, 0 on unneeded tiles or final auction", () => {
+  const ceisu = rack("CEISU");
+
+  // Needed tile 'Z' for CAZIQUES: bids aggressively (p90 + 2)
+  const bidZ = targetBid({
+    letter: "Z",
+    targetWord: "CAZIQUES",
+    rack: ceisu,
+    balance: 100,
+    round: 5,
+    auctionsLeft: 60,
+  });
+  assert.ok(bidZ.isTargetLetter, "Z is a needed target tile");
+  assert.ok(bidZ.amount >= 50, `Expected aggressive bid for Z, got ${bidZ.amount}`);
+
+  // Needed tile 'A' for CAZIQUES: bids aggressively (p90 + 2)
+  const bidA = targetBid({
+    letter: "A",
+    targetWord: "CAZIQUES",
+    rack: ceisu,
+    balance: 100,
+    round: 5,
+    auctionsLeft: 60,
+  });
+  assert.ok(bidA.isTargetLetter, "A is a needed target tile");
+  assert.ok(bidA.amount >= 20, `Expected aggressive bid for A, got ${bidA.amount}`);
+
+  // Unneeded tile 'X' for CAZIQUES: bids 0!
+  const bidX = targetBid({
+    letter: "X",
+    targetWord: "CAZIQUES",
+    rack: ceisu,
+    balance: 100,
+    round: 5,
+    auctionsLeft: 60,
+  });
+  assert.equal(bidX.isTargetLetter, false, "X is not needed for CAZIQUES");
+  assert.equal(bidX.amount, 0, "Must bid 0 on unneeded tile");
+
+  // Final auction (auctionsLeft = 1): bids 0 even for needed tile
+  const bidLast = targetBid({
+    letter: "Z",
+    targetWord: "CAZIQUES",
+    rack: ceisu,
+    balance: 100,
+    round: 68,
+    auctionsLeft: 1,
+  });
+  assert.equal(bidLast.amount, 0, "Final auction must bid 0");
+
+  // Balance cap: never bids above balance
+  const bidLowBalance = targetBid({
+    letter: "Z",
+    targetWord: "CAZIQUES",
+    rack: ceisu,
+    balance: 15,
+    round: 5,
+    auctionsLeft: 60,
+  });
+  assert.equal(bidLowBalance.amount, 15, "Cannot exceed balance");
 });

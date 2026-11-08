@@ -28,7 +28,8 @@ import {
 import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { rawBid as decideRawBid, completesTarget, nearTarget, playedLongWord } from "./bid.js";
+import { rawBid as decideRawBid, completesTarget, nearTarget, playedLongWord, targetBid } from "./bid.js";
+import { MatchTargetTracker } from "./target.js";
 import { letterValues, type ValueTable } from "./value.js";
 import { applyBudget } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
@@ -94,6 +95,7 @@ const matchLogs = new MatchLogs(defaultLogDir(), BOT_NAME);
 const seenAuctions = new Set<string>();
 const startedMatches = new Set<string>();
 const endedMatches = new Set<string>();
+const matchTargets = new Map<string, MatchTargetTracker>();
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -131,6 +133,7 @@ function noteMatchStart(conn: DbConnection, matchId: bigint) {
   const m = conn.db.matchState.id.find(matchId);
   if (m?.status.tag !== "Running" || !inMatch(conn, matchId)) return;
   startedMatches.add(key);
+  const startingRack = rackForMatch(conn, matchId);
   matchLogs.log(matchId, "match_start", {
     myBotId,
     startedAtMs: m.startedAt ? Number(m.startedAt.toMillis()) : undefined,
@@ -139,8 +142,36 @@ function noteMatchStart(conn: DbConnection, matchId: bigint) {
     auctionDurationMs: m.auctionDurationMs,
     startingRackSize: m.startingRackSize,
     participants: participantsSummary(conn, matchId),
-    rack: Object.fromEntries(rackForMatch(conn, matchId)),
+    rack: Object.fromEntries(startingRack),
   });
+
+  // Evaluate starting tiles and select the best forced target route
+  if (startingRack.size > 0 && !matchTargets.has(key)) {
+    const tracker = new MatchTargetTracker(matchId);
+    tracker.update(startingRack);
+    matchTargets.set(key, tracker);
+    if (tracker.target) {
+      const t = tracker.target;
+      const rackStr = [...startingRack.entries()]
+        .map(([c, n]) => c.repeat(n))
+        .join("");
+      const missingStr = [...t.missing.entries()]
+        .map(([c, n]) => `${c}:${n}`)
+        .join(" ");
+      console.log(
+        `[${BOT_NAME}] match ${matchId}: starting rack [${rackStr}] -> TARGET WORD: '${t.word}' (reward ${t.reward}, needs ${t.missingCount}: ${missingStr}, P(play) ${(t.pPlay * 100).toFixed(1)}%, P(bag) ${(t.pBag * 100).toFixed(1)}%)`,
+      );
+      matchLogs.log(matchId, "target_selected", {
+        targetWord: t.word,
+        reward: t.reward,
+        missingCount: t.missingCount,
+        missing: Object.fromEntries(t.missing),
+        pPlay: t.pPlay,
+        pBag: t.pBag,
+        ev: t.ev,
+      });
+    }
+  }
 }
 
 function resolveMyBotId(conn: DbConnection): bigint | null {
@@ -213,6 +244,100 @@ function tryBid(
   const state = matchStateFromConn(conn, matchId, myBotId);
   if (!state) return;
   const rack = state.myRack;
+
+  // Forced target bidding: if we are chasing a target word that hasn't been played
+  let targetTracker = matchTargets.get(String(matchId));
+  if (!targetTracker && rack.size > 0) {
+    targetTracker = new MatchTargetTracker(matchId);
+    targetTracker.update(rack, unseenPool(state).unseen);
+    matchTargets.set(String(matchId), targetTracker);
+  }
+
+  if (targetTracker && targetTracker.target && !targetTracker.played && !targetTracker.abandoned) {
+    // Dynamic viability check: if pool cannot form the target word, re-route
+    const pool = unseenPool(state).unseen;
+    const oldWord = targetTracker.target.word;
+    targetTracker.update(rack, pool);
+    if (targetTracker.target && targetTracker.target.word !== oldWord) {
+      console.log(
+        `[${BOT_NAME}] match ${matchId}: target '${oldWord}' became impossible, re-routed -> '${targetTracker.target.word}' (needs ${targetTracker.target.missingCount})`,
+      );
+      matchLogs.log(matchId, "target_rerouted", {
+        oldTarget: oldWord,
+        newTarget: targetTracker.target.word,
+        missingCount: targetTracker.target.missingCount,
+      });
+    }
+
+    if (targetTracker.target && !targetTracker.abandoned) {
+      const t0 = performance.now();
+      const tBid = targetBid({
+        letter,
+        targetWord: targetTracker.target.word,
+        rack,
+        balance: state.myBalance,
+        round: state.round,
+        auctionsLeft: state.auctionsLeft,
+      });
+      const amount = tBid.amount;
+      const decideMs = performance.now() - t0;
+      const sendMs = Date.now();
+
+      if (amount > 0) {
+        conn.reducers
+          .submitBid({ auctionId, amount: BigInt(amount) })
+          .catch((err: unknown) => {
+            logFailure(`bid on auction ${auctionId}`)(err);
+            matchLogs.log(matchId, "bid_error", {
+              auctionId,
+              letter,
+              amount,
+              error: errMsg(err),
+              ...sinceOpen(Date.now(), opensAtMs, seenMs),
+            });
+          });
+        bidsByAuction.add(key);
+      }
+
+      if (!seenAuctions.has(key)) {
+        seenAuctions.add(key);
+        noteMatchStart(conn, matchId);
+        const poolCheckRes = poolCheck(state);
+        matchLogs.log(matchId, "auction_seen", {
+          auctionId,
+          letter,
+          round: state.round,
+          bagTotal: state.bagTotal,
+          opensAtMs,
+          seenMs,
+          recvLagMs: opensAtMs !== undefined ? seenMs - opensAtMs : undefined,
+          unseenTotal: poolCheckRes.unseenTotal,
+          unseenExpected: poolCheckRes.unseenExpected,
+        });
+      }
+
+      matchLogs.log(matchId, amount > 0 ? "bid_sent" : "bid_skipped", {
+        auctionId,
+        letter,
+        amount,
+        targetWord: targetTracker.target.word,
+        isTargetLetter: tBid.isTargetLetter,
+        bidReason: tBid.reason,
+        balance: state.myBalance,
+        rack: Object.fromEntries(rack),
+        decideMs: Math.round(decideMs * 1000) / 1000,
+        ...sinceOpen(sendMs, opensAtMs, seenMs),
+      });
+
+      if (amount > 0) {
+        console.log(
+          `[${BOT_NAME}] TARGET BID ${amount} on '${letter}' for '${targetTracker.target.word}' (match ${matchId}, auction ${auctionId})`,
+        );
+      }
+      return;
+    }
+  }
+
   // decideMs times valuation, the bid formula and applyBudget together (the whole decision).
   const t0 = performance.now();
   // S2-2: letter values. unseenPool already counts the open auction's letter
@@ -317,15 +442,34 @@ function tryPlayWord(conn: DbConnection) {
     const rack = state.myRack;
     const phase = playPhase(state.auctionsLeft, state.myBalance);
     if (!guard.shouldEvaluate(rack, phase)) continue;
+    const targetTracker = matchTargets.get(key);
+    const activeTarget =
+      targetTracker && !targetTracker.played && !targetTracker.abandoned
+        ? targetTracker.target?.word
+        : undefined;
+
     const words = choosePlay({
       rack,
       balance: state.myBalance,
       auctionsLeft: state.auctionsLeft,
       index: WORD_INDEX,
+      targetWord: activeTarget,
     });
     guard.record(rack, phase, words);
     for (const word of words) {
-      console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);
+      if (activeTarget && word === activeTarget) {
+        if (targetTracker) targetTracker.played = true;
+        console.log(
+          `[${BOT_NAME}] match ${matchId}: FORCED TARGET PLAYED! '${word}' (now free-playing remaining tiles)`,
+        );
+        matchLogs.log(matchId, "target_played", {
+          targetWord: word,
+          balance: state.myBalance,
+          round: state.round,
+        });
+      } else {
+        console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);
+      }
       conn.reducers
         .submitWord({ matchId, word })
         .catch((err: unknown) => {
@@ -467,6 +611,7 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
         matchLogs.close(neu.id);
       }
       if (wasIn) {
+        matchTargets.delete(String(neu.id));
         console.log(`[${BOT_NAME}] match ${neu.id} ended; rejoining lobby`);
         joinLobby(conn);
         // Drop the ended match's auctions, results and words from the cache.

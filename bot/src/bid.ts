@@ -32,6 +32,8 @@
 
 import { priceFor, type Pct } from "./prices.js";
 import type { ValueTable } from "./value.js";
+import { targetNeedsLetter } from "./target.js";
+import type { Rack } from "./words.js";
 
 /** Coins of bid per expected point of value. Tuned in S3-2 (was 1.4). */
 export const COINS_PER_POINT = 2.3;
@@ -225,4 +227,55 @@ export function nearTarget(table: ValueTable, rack: Map<string, number>, letter:
 export function playedLongWord(words: Iterable<{ botId: bigint; word: string }>, myBotId: bigint): boolean {
   for (const w of words) if (w.botId === myBotId && w.word.length >= LONG_WORD_LEN) return true;
   return false;
+}
+
+export interface TargetBidDecision {
+  amount: number;
+  isTargetLetter: boolean;
+  reason: string;
+}
+
+export interface TargetBidContext {
+  letter: string;
+  targetWord: string;
+  rack: Rack;
+  balance: number;
+  round: number;
+  auctionsLeft: number;
+  prices?: (letter: string, round: number, pct: Pct) => number;
+}
+
+/**
+ * Forced bidding policy for completing a chosen high-scoring target word:
+ * - If the auctioned letter is still needed for targetWord: bids aggressively (p90+2)
+ *   to guarantee winning the tile.
+ * - If the auctioned letter is not needed: bids 0 to conserve coins and rack capacity.
+ * - Never bids on the final auction (auctionsLeft <= 1) as the tile cannot be played.
+ */
+export function targetBid(ctx: TargetBidContext): TargetBidDecision {
+  if (ctx.auctionsLeft <= 1) {
+    return {
+      amount: 0,
+      isTargetLetter: false,
+      reason: "final auction: tile cannot be played",
+    };
+  }
+
+  if (targetNeedsLetter(ctx.targetWord, ctx.rack, ctx.letter)) {
+    const lookup = ctx.prices ?? priceFor;
+    const p90 = lookup(ctx.letter, ctx.round, 90);
+    const aggressiveBid = Math.max(p90 + 2, 20);
+    const amount = Math.min(ctx.balance, aggressiveBid);
+    return {
+      amount,
+      isTargetLetter: true,
+      reason: `needed for target '${ctx.targetWord}' (p90=${p90})`,
+    };
+  }
+
+  return {
+    amount: 0,
+    isTargetLetter: false,
+    reason: `unneeded for target '${ctx.targetWord}'`,
+  };
 }

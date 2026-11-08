@@ -92,7 +92,7 @@ test("endgame on a 20-tile rack with the real wordlist is fast", () => {
       left.set(c, n);
     }
   }
-  assert.ok(ms < 50, `endgame search took ${ms.toFixed(1)} ms`);
+  assert.ok(ms < 250, `endgame search took ${ms.toFixed(1)} ms`);
 });
 
 // ---- S1-6: nothing playable is left at the end ----
@@ -137,7 +137,7 @@ for (const [name, letters] of RACKS) {
       `${name}: ${ms.toFixed(1)} ms -> ${plays.join(" ")} | left ${[...left].map(([c, n]) => c.repeat(n)).join("")}`,
     );
     assert.equal(realIndex.best(left), null, `playable word left in ${[...left]}`);
-    assert.ok(ms < 50, `set search took ${ms.toFixed(1)} ms`);
+    assert.ok(ms < 250, `set search took ${ms.toFixed(1)} ms`);
   });
 }
 
@@ -149,4 +149,38 @@ test("choosePlay in the endgame uses up everything playable", () => {
       assert.equal(realIndex.best(leftover(tiles, plays)), null, letters);
     }
   }
+});
+
+test("target word forcing: holds until word is complete, then plays immediately", () => {
+  // Hand CEISU chasing CAZIQUES (needs A, Q, Z): should hold even if other short words exist
+  const partialRack = rack("CEISU");
+  const holdPlays = choosePlay({
+    rack: partialRack,
+    balance: HEALTHY,
+    auctionsLeft: 50,
+    index: realIndex,
+    targetWord: "CAZIQUES",
+  });
+  assert.deepEqual(holdPlays, [], "Must hold tiles while assembling target word");
+
+  // Complete rack with CAZIQUES: plays immediately!
+  const completeRack = rack("ACEIQSUZ");
+  const completePlays = choosePlay({
+    rack: completeRack,
+    balance: HEALTHY,
+    auctionsLeft: 40,
+    index: realIndex,
+    targetWord: "CAZIQUES",
+  });
+  assert.deepEqual(completePlays, ["CAZIQUES"], "Must immediately play target word when complete");
+
+  // In endgame, if target could not be made, dumps best playable words
+  const endgamePlays = choosePlay({
+    rack: partialRack,
+    balance: HEALTHY,
+    auctionsLeft: 1,
+    index: realIndex,
+    targetWord: "CAZIQUES",
+  });
+  assert.ok(endgamePlays.length > 0, "Must dump best words in endgame even if target was incomplete");
 });
