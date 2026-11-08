@@ -32,7 +32,7 @@ import { rawBid as decideRawBid, completesTarget, nearTarget, playedLongWord } f
 import { letterValues, type ValueTable } from "./value.js";
 import { applyBudget } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
-import { choosePlay } from "./play.js";
+import { budgetHighValue, highValueBid, playFor, strategyFromEnv } from "./highValue.js";
 import { PlayGuard, playPhase } from "./playGuard.js";
 import { WordIndex } from "./words.js";
 import { matchStateFromConn } from "./state.js";
@@ -52,6 +52,10 @@ const BOT_TOKEN = process.env.BOT_TOKEN; // from the website, first run only
 const BOT_NONCE = process.env.BOT_NONCE; // from the CLI, first run only
 const TOURNAMENT_ID = process.env.TOURNAMENT_ID;
 const TOKEN_PATH = path.join(process.cwd(), `.token-${BOT_NAME}`);
+// Experiment switch (highValue.ts): STRATEGY=highvalue (default on this
+// branch) or STRATEGY=main for main's bid formula and play policy.
+const STRATEGY = strategyFromEnv(process.env.STRATEGY);
+const choosePlay = playFor(STRATEGY);
 
 function loadToken(): string | undefined {
   try {
@@ -133,6 +137,7 @@ function noteMatchStart(conn: DbConnection, matchId: bigint) {
   startedMatches.add(key);
   matchLogs.log(matchId, "match_start", {
     myBotId,
+    strategy: STRATEGY,
     startedAtMs: m.startedAt ? Number(m.startedAt.toMillis()) : undefined,
     bagTotal: m.bagTotal,
     auctionType: m.auctionType.tag,
@@ -213,6 +218,10 @@ function tryBid(
   const state = matchStateFromConn(conn, matchId, myBotId);
   if (!state) return;
   const rack = state.myRack;
+  if (STRATEGY === "highvalue") {
+    tryBidHighValue(conn, { auctionId, matchId, letter, state, key, seenMs, opensAtMs });
+    return;
+  }
   // decideMs times valuation, the bid formula and applyBudget together (the whole decision).
   const t0 = performance.now();
   // S2-2: letter values. unseenPool already counts the open auction's letter
@@ -234,6 +243,72 @@ function tryBid(
   // S2-4/S2-5: spend-down pace and never bidding on the last auction.
   const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter });
   const decideMs = performance.now() - t0;
+  sendAndLog(conn, { auctionId, matchId, letter, state, key, seenMs, opensAtMs }, amount, {
+    strategy: STRATEGY,
+    rawBid,
+    budgetReason,
+    value: Math.round(bid.value * 100) / 100,
+    ceiling: Math.round(bid.ceiling * 100) / 100,
+    marketCap: bid.marketCap,
+    marketPct: bid.pct,
+    bidReason: bid.reason,
+    boost: bid.boost,
+    boostReason: bid.boostReason,
+    decideMs: Math.round(decideMs * 1000) / 1000,
+  });
+}
+
+interface BidTarget {
+  auctionId: bigint;
+  matchId: bigint;
+  letter: string;
+  state: NonNullable<ReturnType<typeof matchStateFromConn>>;
+  key: string;
+  seenMs: number;
+  opensAtMs?: number;
+}
+
+// Experiment: premium letters, big words (highValue.ts).
+function tryBidHighValue(conn: DbConnection, b: BidTarget) {
+  const { state, letter } = b;
+  const t0 = performance.now();
+  const bid = highValueBid({
+    letter,
+    rack: state.myRack,
+    pool: unseenPool(state).unseen,
+    balance: state.myBalance,
+    auctionsLeft: state.auctionsLeft,
+    round: state.round,
+    isLastAuction: state.isLastAuction,
+    index: WORD_INDEX,
+  });
+  // S2-4/S2-5 still apply; budgetHighValue keeps spend-down out of the reserve.
+  const { amount, budgetReason, clampedToReserve } = budgetHighValue(bid, { ...state, letter });
+  const decideMs = performance.now() - t0;
+  sendAndLog(conn, b, amount, {
+    strategy: STRATEGY,
+    rawBid: bid.amount,
+    budgetReason,
+    bidReason: bid.reason,
+    bidDetail: bid.detail,
+    target: bid.target?.word,
+    targetReward: bid.target?.reward,
+    targetMissing: bid.target?.missing,
+    gain: bid.gain !== undefined ? Math.round(bid.gain * 100) / 100 : undefined,
+    reserve: bid.reserve,
+    clampedToReserve,
+    decideMs: Math.round(decideMs * 1000) / 1000,
+  });
+}
+
+// Send the bid (if any), then log auction_seen once and bid_sent/bid_skipped.
+function sendAndLog(
+  conn: DbConnection,
+  b: BidTarget,
+  amount: number,
+  fields: Record<string, unknown>,
+) {
+  const { auctionId, matchId, letter, state, key, seenMs, opensAtMs } = b;
   const sendMs = Date.now();
   if (amount > 0) {
     conn.reducers
@@ -271,18 +346,9 @@ function tryBid(
     auctionId,
     letter,
     amount,
-    rawBid,
-    budgetReason,
-    value: Math.round(bid.value * 100) / 100,
-    ceiling: Math.round(bid.ceiling * 100) / 100,
-    marketCap: bid.marketCap,
-    marketPct: bid.pct,
-    bidReason: bid.reason,
-    boost: bid.boost,
-    boostReason: bid.boostReason,
+    ...fields,
     balance: state.myBalance,
-    rack: Object.fromEntries(rack),
-    decideMs: Math.round(decideMs * 1000) / 1000,
+    rack: Object.fromEntries(state.myRack),
     ...sinceOpen(sendMs, opensAtMs, seenMs),
   });
   if (amount <= 0) return;
@@ -596,7 +662,7 @@ function bootstrapActivity(conn: DbConnection) {
 }
 
 function main() {
-  console.log(`[${BOT_NAME}] connecting to ${DB_NAME} at ${HOST}`);
+  console.log(`[${BOT_NAME}] connecting to ${DB_NAME} at ${HOST} (strategy ${STRATEGY})`);
   DbConnection.builder()
     .withUri(HOST)
     .withDatabaseName(DB_NAME)
