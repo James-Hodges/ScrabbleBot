@@ -100,7 +100,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S1-7 | Subscribe only to our own matches (fixes out-of-memory crash) | James | [x] |
 | S2-1 | Winning-bid table per letter and phase | ooVrq | [x] |
 | S2-2 | Letter valuation | James | [x] |
-| S2-3 | Bid formula | | [ ] |
+| S2-3 | Bid formula | James | [ ] |
 | S2-4 | Spend down coins | ooVrq | [ ] |
 | S2-5 | Skip the last auction | ooVrq | [ ] |
 | S2-6 | Early coin snowball | | [ ] |
