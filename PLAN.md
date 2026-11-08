@@ -90,14 +90,14 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S0-1 | Bot identity and token | James | [x] |
 | S0-2 | Starter kit in our repo | James | [x] |
 | S0-3 | First live match | James | [x] |
-| S0-4 | Match logging with bid timing | ooVrq (live check: James, see HANDOFF.md) | [ ] |
-| S1-1 | Match state | ooVrq (live check: James, see HANDOFF.md) | [ ] |
+| S0-4 | Match logging with bid timing | ooVrq (live check: James) | [x] |
+| S1-1 | Match state | ooVrq (live check: James, see HANDOFF.md) (live check: James) | [x] |
 | S1-2 | Unseen-tile pool | ooVrq | [ ] |
 | S1-3 | Opponents' known letters | | [ ] |
 | S1-4 | Fast word index | James | [x] |
 | S1-5 | Hold letters for long words | James | [x] |
 | S1-6 | Empty the rack before the end | | [ ] |
-| S1-7 | Subscribe only to our own matches (fixes out-of-memory crash) | James | [ ] |
+| S1-7 | Subscribe only to our own matches (fixes out-of-memory crash) | James | [x] |
 | S2-1 | Winning-bid table per letter and phase | | [ ] |
 | S2-2 | Letter valuation | | [ ] |
 | S2-3 | Bid formula | | [ ] |
