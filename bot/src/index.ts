@@ -33,6 +33,7 @@ import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 import { choosePlay } from "./play.js";
 import { WordIndex } from "./words.js";
 import { matchStateFromConn } from "./state.js";
+import { poolCheck } from "./pool.js";
 import {
   baseQueries,
   coreQueries,
@@ -209,6 +210,7 @@ function tryBid(
   if (!seenAuctions.has(key)) {
     seenAuctions.add(key);
     noteMatchStart(conn, matchId);
+    const pool = poolCheck(state);
     matchLogs.log(matchId, "auction_seen", {
       auctionId,
       letter,
@@ -217,6 +219,8 @@ function tryBid(
       opensAtMs,
       seenMs,
       recvLagMs: opensAtMs !== undefined ? seenMs - opensAtMs : undefined,
+      unseenTotal: pool.unseenTotal,
+      unseenExpected: pool.unseenExpected,
     });
   }
   matchLogs.log(matchId, amount > 0 ? "bid_sent" : "bid_skipped", {
