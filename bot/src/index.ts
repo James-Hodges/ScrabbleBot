@@ -31,6 +31,7 @@ import * as path from "node:path";
 import { decideBid } from "./strategy.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 import { choosePlay } from "./play.js";
+import { PlayGuard, playPhase } from "./playGuard.js";
 import { WordIndex } from "./words.js";
 import { matchStateFromConn } from "./state.js";
 import { poolCheck } from "./pool.js";
@@ -238,11 +239,13 @@ function tryBid(
   );
 }
 
-// Rack states (per match) we've already submitted words for, including the
-// in-between states our own multi-word plays pass through, so the rack
-// updates those plays cause don't resubmit the same words.
-const playedRackStates = new Map<string, Set<string>>();
+// Per-match play guard (playGuard.ts): re-decide only when the rack or the
+// play phase changes, and never while our own words are in flight.
+const playGuards = new Map<string, PlayGuard>();
 
+// Runs on our rack changes, on every round of our running matches, and on
+// our balance changes, so the endgame dump and the refill fire even when the
+// rack hasn't changed.
 function tryPlayWord(conn: DbConnection) {
   if (myBotId === null) return;
   // Only matches still being played. The bot keeps its letters from
@@ -253,27 +256,23 @@ function tryPlayWord(conn: DbConnection) {
     const m = conn.db.matchState.id.find(p.matchId);
     if (m?.status.tag === "Running") matches.push(p.matchId);
   }
-  const rackKey = (r: Map<string, number>) =>
-    [...r].filter(([, n]) => n > 0).map(([c, n]) => c + n).sort().join("");
   for (const matchId of matches) {
     const key = String(matchId);
-    const seen = playedRackStates.get(key) ?? new Set<string>();
-    playedRackStates.set(key, seen);
+    const guard = playGuards.get(key) ?? new PlayGuard();
+    playGuards.set(key, guard);
     const state = matchStateFromConn(conn, matchId, myBotId);
     if (!state) continue;
     const rack = state.myRack;
-    if (seen.has(rackKey(rack))) continue;
+    const phase = playPhase(state.auctionsLeft, state.myBalance);
+    if (!guard.shouldEvaluate(rack, phase)) continue;
     const words = choosePlay({
       rack,
       balance: state.myBalance,
       auctionsLeft: state.auctionsLeft,
       index: WORD_INDEX,
     });
-    if (words.length === 0) continue;
-    const left = new Map(rack);
+    guard.record(rack, phase, words);
     for (const word of words) {
-      seen.add(rackKey(left));
-      for (const c of word) left.set(c, (left.get(c) ?? 0) - 1);
       console.log(`[${BOT_NAME}] match ${matchId}: playing '${word}'`);
       conn.reducers
         .submitWord({ matchId, word })
@@ -386,11 +385,19 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
   conn.db.matchParticipant.onInsert((_ctx, p) => {
     if (p.botId === myBotId) noteMatchStart(conn, p.matchId);
   });
+  // Our balance changed: may cross into or out of the refill phase.
+  conn.db.matchParticipant.onUpdate((_ctx, _old, p) => {
+    if (p.botId === myBotId) tryPlayWord(conn);
+  });
 
   // When a match this bot was in ends, hop back into the lobby.
   conn.db.matchState.onUpdate((_ctx, old, neu) => {
     if (myBotId === null) return;
-    if (neu.status.tag === "Running") noteMatchStart(conn, neu.id);
+    if (neu.status.tag === "Running") {
+      noteMatchStart(conn, neu.id);
+      // Round advance: may enter the endgame with an unchanged rack.
+      if (inMatch(conn, neu.id)) tryPlayWord(conn);
+    }
     if (old.status.tag !== "Ended" && neu.status.tag === "Ended") {
       const wasIn = Array.from(conn.db.matchParticipant.iter()).some(
         (p) => p.matchId === neu.id && p.botId === myBotId,

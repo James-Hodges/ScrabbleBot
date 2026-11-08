@@ -62,7 +62,8 @@ export function choosePlay(ctx: PlayContext): string[] {
 /**
  * The set of words (each using up its letters) with the highest total
  * reward, ordered by reward desc. Bounded DFS seeded with the greedy answer,
- * so a hit on the time cap still returns at least the greedy set.
+ * so a hit on the time cap still returns at least the greedy set, then
+ * extended greedily so no playable word is left in the rack.
  */
 export function bestWordSet(rack: Rack, index: WordIndex): string[] {
   // Every word spellable from a sub-rack is spellable from the full rack, so
@@ -138,6 +139,18 @@ export function bestWordSet(rack: Rack, index: WordIndex): string[] {
     }
   };
   dfs(0, 0);
+
+  // The DFS stops at SET_MAX_WORDS words (or the time cap), so its best set
+  // can leave playable words behind. Extend it greedily, best reward first:
+  // tiles only ever get used up, so a word that doesn't fit when the pass
+  // reaches it never fits later, and the leftover has no playable word.
+  for (const k of bestPicks) take(k, rc, 1);
+  for (let k = 0; k < n; k++) {
+    while (fits(k, rc)) {
+      take(k, rc, 1);
+      bestPicks.push(k);
+    }
+  }
 
   return bestPicks
     .slice()

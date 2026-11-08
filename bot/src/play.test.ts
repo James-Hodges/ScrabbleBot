@@ -94,3 +94,59 @@ test("endgame on a 20-tile rack with the real wordlist is fast", () => {
   }
   assert.ok(ms < 50, `endgame search took ${ms.toFixed(1)} ms`);
 });
+
+// ---- S1-6: nothing playable is left at the end ----
+
+const realIndex = WordIndex.fromFile(new URL("../data/wordlist.txt", import.meta.url));
+
+/** Assert `plays` fit in `tiles`; return the leftover rack. */
+function leftover(tiles: Rack, plays: string[]): Rack {
+  const left = new Map(tiles);
+  for (const w of plays) {
+    assert.ok(realIndex.isWord(w), w);
+    for (const c of w) {
+      const n = (left.get(c) ?? 0) - 1;
+      assert.ok(n >= 0, `over-used ${c} in ${plays.join(" ")}`);
+      if (n > 0) left.set(c, n);
+      else left.delete(c);
+    }
+  }
+  return left;
+}
+
+const RACKS: [string, string][] = [
+  ["8 mixed", "RETAINSX"],
+  ["10 vowel-heavy", "AEIOUAEIRT"],
+  ["12 consonant-heavy", "BCDFGHKLMNRS"],
+  ["14 vowel-heavy", "AAEEIIOOUUSTNL"],
+  ["16 consonant-heavy", "BCDFGHJKLMNPRSTA"],
+  ["18 mixed", "AEEIORSTNLDGUPMCHQ"],
+  ["20 mixed", "AEEIIORSTNLDGUPMCAHS"],
+  ["20 vowel-heavy", "AAAEEEEIIIOOOUURSTNL"],
+  ["20 consonant-heavy", "BBCCDDFGGHKLMMNPRSTE"],
+];
+
+for (const [name, letters] of RACKS) {
+  test(`bestWordSet leaves no playable word: ${name}`, () => {
+    const tiles = rack(letters);
+    const start = performance.now();
+    const plays = bestWordSet(tiles, realIndex);
+    const ms = performance.now() - start;
+    const left = leftover(tiles, plays);
+    console.log(
+      `${name}: ${ms.toFixed(1)} ms -> ${plays.join(" ")} | left ${[...left].map(([c, n]) => c.repeat(n)).join("")}`,
+    );
+    assert.equal(realIndex.best(left), null, `playable word left in ${[...left]}`);
+    assert.ok(ms < 50, `set search took ${ms.toFixed(1)} ms`);
+  });
+}
+
+test("choosePlay in the endgame uses up everything playable", () => {
+  for (const auctionsLeft of [ENDGAME_AUCTIONS, 2, 1]) {
+    for (const [, letters] of RACKS) {
+      const tiles = rack(letters);
+      const plays = choosePlay({ rack: tiles, balance: HEALTHY, auctionsLeft, index: realIndex });
+      assert.equal(realIndex.best(leftover(tiles, plays)), null, letters);
+    }
+  }
+});
