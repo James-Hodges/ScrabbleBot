@@ -145,7 +145,7 @@ The starter bot bids the letter's value (+2 if it has none of that letter yet) a
 - [x] How are tied bids broken? At random.
 - [x] Is there a minimum bid? Does a bid of 0 count? Bids of 0 are ignored; a lone bidder pays 1.
 - [ ] Which auction type will the tournament use?
-- [ ] How much time is there between the last auction closing and the match ending, in practice? (It looks like none.)
+- [x] How much time is there between the last auction closing and the match ending, in practice? None: `closeAuction` awards the letter and sets the match to Ended in the same reducer.
 
 ## Main bet
 

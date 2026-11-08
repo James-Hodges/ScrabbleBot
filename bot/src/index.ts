@@ -29,6 +29,7 @@ import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { decideBid } from "./strategy.js";
+import { applyBudget } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 import { choosePlay } from "./play.js";
 import { PlayGuard, playPhase } from "./playGuard.js";
@@ -184,12 +185,15 @@ function tryBid(
   const state = matchStateFromConn(conn, matchId, myBotId);
   if (!state) return;
   const rack = state.myRack;
+  // decideMs times decideBid and applyBudget together (the whole decision).
   const t0 = performance.now();
-  const amount = decideBid({
+  const rawBid = decideBid({
     letter,
     myBalance: state.myBalance,
     myRack: rack,
   });
+  // S2-4/S2-5: spend-down pace and never bidding on the last auction.
+  const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter });
   const decideMs = performance.now() - t0;
   const sendMs = Date.now();
   if (amount > 0) {
@@ -228,6 +232,8 @@ function tryBid(
     auctionId,
     letter,
     amount,
+    rawBid,
+    budgetReason,
     balance: state.myBalance,
     rack: Object.fromEntries(rack),
     decideMs: Math.round(decideMs * 1000) / 1000,

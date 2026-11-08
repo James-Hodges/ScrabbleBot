@@ -217,7 +217,7 @@ The two of us can work at the same time without touching the same files:
 
 ## Open questions
 
-- [ ] Is there any time to play a word after the last auction closes? (Checked in S2-5.)
+- [x] Is there any time to play a word after the last auction closes? No: the server ends the match in the same step that awards the last letter, and later words get "Match not running" (checked in S2-5).
 - [ ] Which auction type will the tournament use? (Decides whether B-4 is needed.)
 - [ ] When does tournament registration open, and how many bots per table?
 
