@@ -47,6 +47,26 @@ export const MIN_RESERVE_PER_AUCTION = 1;
 export const ALL_IN_AUCTIONS = 2;
 /** Before the bomb lands, coins kept back per target tile still to buy. */
 export const BOMB_RESERVE_PER_TILE = 6;
+/**
+ * Spending discipline before the first word (bomb phase, outside spend-down).
+ * Live (S-bomb v2): we spent 90–96 of 100 coins in the first 8–18 auctions,
+ * mostly on non-target letters at p75/p90, paying 14–18 per tile vs ~9.
+ */
+/** Normal per-letter cap: at most this share of the current balance... */
+export const BOMB_LETTER_SHARE = 0.18;
+/** ...and at most this market percentile of the letter's winning bid. */
+export const BOMB_MARKET_PCT: Pct = 50;
+/** A target letter leaving at most this many tiles missing counts as near-complete. */
+export const BOMB_NEAR_MISSING = 2;
+/** Near-complete cap: at most this share of the current balance (rawBid's market cap still applies). */
+export const BOMB_NEAR_SHARE = 0.5;
+/** Coins kept unspent until the target is within BOMB_NEAR_MISSING tiles of complete. */
+export const BOMB_KEEP_COINS = 38;
+/**
+ * Below the floor we still bid up to this share of the balance on a letter,
+ * so a far target never leaves us bidding 0 on everything (the old stuck state).
+ */
+export const BOMB_BELOW_FLOOR_SHARE = 0.1;
 /** The bomb reserve never exceeds this share of our balance (so it can't starve us). */
 export const BOMB_RESERVE_MAX_SHARE = 0.5;
 /**
@@ -69,6 +89,68 @@ export interface BudgetContext {
   letter: string;
   /** Coins to keep back outside the spend-down window (see bombReserve). Default 0. */
   reserveCoins?: number;
+  /** Set before our first word (bomb phase): enables the spending discipline. */
+  bomb?: BombBidInput;
+}
+
+export interface BombBidInput {
+  /** Target tiles still missing before this auction (targetMissing), "" with no target. */
+  missing: string;
+  /** The target clears the current first-word cutoff. */
+  targetOk: boolean;
+  /** This letter completes a word we would play now (e.g. rawBid's completes_bingo). */
+  completes: boolean;
+}
+
+/** Whether the open letter completes or nearly completes a qualifying target. */
+export function bombNear(b: BombBidInput, letter: string): boolean {
+  if (b.completes) return true;
+  if (!b.targetOk || !b.missing.includes(letter.toUpperCase())) return false;
+  return b.missing.length - 1 <= BOMB_NEAR_MISSING;
+}
+
+/**
+ * Bomb-phase cap on one bid. Returns the amount and which rule bound it.
+ *   near-complete letter: ≤ BOMB_NEAR_SHARE × balance            ("bomb_near")
+ *   otherwise:            ≤ min(BOMB_LETTER_SHARE × balance, p50) ("bomb_cap")
+ *   target further than BOMB_NEAR_MISSING tiles: keep BOMB_KEEP_COINS ("bomb_floor"),
+ *   but still allow BOMB_BELOW_FLOOR_SHARE × balance; never for a near-complete letter.
+ */
+export function bombCap(
+  raw: number,
+  balance: number,
+  letter: string,
+  round: number,
+  b: BombBidInput,
+): { amount: number; reason: "bomb_cap" | "bomb_floor" | "bomb_near" | null } {
+  const near = bombNear(b, letter);
+  let amount = raw;
+  let reason: "bomb_cap" | "bomb_floor" | "bomb_near" | null = null;
+  if (near) {
+    const cap = Math.floor(balance * BOMB_NEAR_SHARE);
+    if (amount > cap) {
+      amount = cap;
+      reason = "bomb_near";
+    }
+    return { amount, reason };
+  }
+  let market = Infinity;
+  try {
+    market = priceFor(letter, round, BOMB_MARKET_PCT);
+  } catch {
+    // no price data: share cap only
+  }
+  const cap = Math.floor(Math.min(balance * BOMB_LETTER_SHARE, market));
+  if (amount > cap) {
+    amount = cap;
+    reason = "bomb_cap";
+  }
+  const far = !b.targetOk || b.missing.length > BOMB_NEAR_MISSING;
+  if (far && amount > balance - BOMB_KEEP_COINS) {
+    amount = Math.min(amount, Math.max(balance - BOMB_KEEP_COINS, Math.floor(balance * BOMB_BELOW_FLOOR_SHARE)));
+    reason = "bomb_floor";
+  }
+  return { amount, reason };
 }
 
 /**
@@ -89,6 +171,9 @@ export type BudgetReason =
   | "no_balance"
   | "normal"
   | "reserve"
+  | "bomb_cap"
+  | "bomb_floor"
+  | "bomb_near"
   | "spend_down"
   | "spend_down_no_surplus";
 
@@ -118,11 +203,19 @@ export function applyBudget(rawBid: number, ctx: BudgetContext): BudgetResult {
 
   const raw = Math.min(Math.floor(rawBid), balance);
   if (ctx.auctionsLeft > SPEND_DOWN_AUCTIONS) {
-    const keep = Math.max(0, Math.floor(ctx.reserveCoins ?? 0));
-    if (keep > 0 && raw > balance - keep) {
-      return { amount: Math.max(0, balance - keep), reason: "reserve", pace };
+    let amount = raw;
+    let reason: BudgetReason = "normal";
+    if (ctx.bomb) {
+      const c = bombCap(raw, balance, ctx.letter, ctx.round, ctx.bomb);
+      amount = c.amount;
+      if (c.reason) reason = c.reason;
     }
-    return { amount: raw, reason: "normal", pace };
+    const keep = Math.max(0, Math.floor(ctx.reserveCoins ?? 0));
+    if (keep > 0 && amount > balance - keep) {
+      amount = Math.max(0, balance - keep);
+      reason = "reserve";
+    }
+    return { amount, reason, pace };
   }
 
   const surplus = balance - TARGET_LEFTOVER;

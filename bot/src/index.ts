@@ -247,7 +247,15 @@ function tryBid(
   // S2-4/S2-5: spend-down pace and never bidding on the last auction.
   // Before the bomb, keep coins for the target's remaining letters.
   const reserveCoins = played ? 0 : bombReserve(missing, letter, state.myBalance, table.cut?.affordShare ?? 1);
-  const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter, reserveCoins });
+  // Before the first word: per-letter cap and coin floor (budget.ts bombCap).
+  const bomb = table.phase === "bomb"
+    ? {
+        missing,
+        targetOk: (table.target?.reward ?? 0) >= table.minReward,
+        completes: bid.reason === "completes_bingo" || bid.reason === "completes_snowball",
+      }
+    : undefined;
+  const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter, reserveCoins, bomb });
   const decideMs = performance.now() - t0;
   const sendMs = Date.now();
   if (amount > 0) {
