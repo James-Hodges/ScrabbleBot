@@ -13,7 +13,11 @@
 // p75 when the letter completes a word right now.
 //
 // The exchange rate: winners spend ~225 coins for ~161 points (ANALYSIS.md),
-// ~0.7 points per coin, so one expected point is worth ~1.4 coins of bid.
+// ~0.7 points per coin, which suggested ~1.4 coins of bid per point. Live,
+// 1.4 left the ceiling binding on 62 of 64 bids (match 45094: 8 tiles won,
+// 6th of 6), because S2-2's early values (3-7 points) understate what a
+// tile is worth over a whole match. S3-2 tuning step 1 raises it to 2.3 so
+// a typical early value (~5 points) reaches the market median (~11-12).
 //
 // Pure. applyBudget (budget.ts) post-processes `amount` for the match clock;
 // a 0 here stays 0 there.
@@ -21,8 +25,8 @@
 import { priceFor, type Pct } from "./prices.js";
 import type { ValueTable } from "./value.js";
 
-/** Coins of bid per expected point of value (winners: ~225 coins → ~161 points). */
-export const COINS_PER_POINT = 1.4;
+/** Coins of bid per expected point of value. Tuned in S3-2 (was 1.4). */
+export const COINS_PER_POINT = 2.3;
 /** Below this many expected points a letter is unusable to us: bid 0. */
 export const MIN_VALUE_POINTS = 0.5;
 /** Default market percentile. */

@@ -104,8 +104,13 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S2-4 | Spend down coins | ooVrq (live check: James) | [x] |
 | S2-5 | Skip the last auction | ooVrq (live check: James) | [x] |
 | S2-6 | Early coin snowball | | [ ] |
+<<<<<<< Updated upstream
 | S3-1 | Benchmark script | ooVrq | [x] |
 | S3-2 | Tune bid and play numbers | | [ ] |
+=======
+| S3-1 | Benchmark script | ooVrq | [ ] |
+| S3-2 | Tune bid and play numbers | James | [ ] |
+>>>>>>> Stashed changes
 | S3-3 | Tag a version only when better | | [ ] |
 | B-1 | Register for the tournament | | [ ] |
 | B-2 | Deny letters to the leader | | [ ] |

@@ -68,20 +68,22 @@ test("ceiling below the market: bid the ceiling", () => {
 });
 
 test("high value raises the percentile cap", () => {
-  // ceiling 14 vs p50 12: just over the median, capped at p50.
-  const mid = rawBid(ctx({ value: 10 }));
+  // Values are chosen by target ceiling, so retuning COINS_PER_POINT keeps
+  // the same brackets. Ceiling 14 vs p50 12: just over the median, capped at p50.
+  const mid = rawBid(ctx({ value: 14 / COINS_PER_POINT }));
   assert.equal(mid.pct, 50);
   assert.equal(mid.amount, 12);
   assert.equal(mid.reason, "market");
   // ceiling 28 ≥ 1.75 × 12: want it badly, cap at p90.
-  const high = rawBid(ctx({ value: 20 }));
+  const high = rawBid(ctx({ value: 28 / COINS_PER_POINT }));
   assert.equal(high.pct, 90);
   assert.equal(high.amount, 22);
   assert.equal(high.reason, "market");
 });
 
 test("a letter that completes a word now bids up to at least p75", () => {
-  const b = rawBid(ctx({ value: 13, completesWord: true }));
+  // Ceiling 18.2 (1.52 × p50) alone would give p75 too; completesWord keeps it there.
+  const b = rawBid(ctx({ value: 18.2 / COINS_PER_POINT, completesWord: true }));
   assert.equal(b.pct, 75);
   assert.equal(b.amount, 16);
   assert.equal(pctFor(5, 12, true), 75);
