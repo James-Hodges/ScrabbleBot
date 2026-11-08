@@ -2,6 +2,21 @@
 
 Work that one of us built and the other needs to pick up. Delete an entry once it's closed.
 
+## S1-1: Match state (ooVrq → James)
+
+**Status:** code pushed, `npm test` 31/31 and `npx tsc --noEmit` clean. Not yet run live. You can do the live check in the same match as S0-4's.
+
+- **New `bot/src/state.ts`:** this is the shared interface for word and bid code. Call `matchStateFromConn(conn, matchId, myBotId)` and you get a `MatchState` with:
+  - `myRack`, `myBalance`, `myScore`;
+  - `players` (each bot's public balance and score);
+  - `round`, `bagTotal`, `auctionsLeft` and `isLastAuction`;
+  - `auctions` (closed auctions with winner and price paid) and `words` (every word played).
+
+  The core, `buildMatchState`, is pure and takes plain rows, so you can test against it without a server.
+- **`auctionsLeft = bagTotal + 1`,** which includes the open auction. That's the same meaning `play.ts` already used. I checked it against the server's `game.ts`: `drawLetter` decrements `bagTotal` before the auction opens. `isLastAuction` (`bagTotal === 0` while an auction is open) is the hook for S2-5.
+- **`index.ts`:** `tryBid` and `tryPlayWord` now read from the state, and `participantForMatch` is gone. Logging and the subscription code are unchanged.
+- **Live check:** the bot bids and plays as before. In the log, the first `auction_seen` of a 6-player match shows `round: 1, bagTotal: 67`.
+
 ## S0-4: Match logging with bid timing (ooVrq → James)
 
 **Status:** code pushed (`5c22098`, rebased onto S1-4), `npm test` 17/17 and `npx tsc --noEmit` clean. **Not yet run live**, since James runs the bot. S0-4 stays unticked on the sprint board until the live check below passes.

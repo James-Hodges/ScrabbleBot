@@ -32,6 +32,7 @@ import { decideBid } from "./strategy.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 import { choosePlay } from "./play.js";
 import { WordIndex } from "./words.js";
+import { matchStateFromConn } from "./state.js";
 import {
   baseQueries,
   coreQueries,
@@ -153,19 +154,6 @@ function rackForMatch(
   return rack;
 }
 
-function participantForMatch(
-  conn: DbConnection,
-  matchId: bigint,
-): { balance: number; score: number } | null {
-  if (myBotId === null) return null;
-  for (const p of conn.db.matchParticipant.iter()) {
-    if (p.matchId !== matchId) continue;
-    if (p.botId !== myBotId) continue;
-    return { balance: Number(p.balance), score: Number(p.score) };
-  }
-  return null;
-}
-
 // A reducer call fails when the module refuses it, often for an expected
 // reason: a word played just after its match ended, a bid that missed the
 // auction's window. Log it and keep playing; an uncaught failure would stop
@@ -188,14 +176,13 @@ function tryBid(
   if (myBotId === null) return;
   const key = `${matchId}:${auctionId}`;
   if (bidsByAuction.has(key)) return;
-  const participant = participantForMatch(conn, matchId);
-  if (!participant) return;
-  const match = conn.db.matchState.id.find(matchId);
-  const rack = rackForMatch(conn, matchId);
+  const state = matchStateFromConn(conn, matchId, myBotId);
+  if (!state) return;
+  const rack = state.myRack;
   const t0 = performance.now();
   const amount = decideBid({
     letter,
-    myBalance: participant.balance,
+    myBalance: state.myBalance,
     myRack: rack,
   });
   const decideMs = performance.now() - t0;
@@ -222,8 +209,8 @@ function tryBid(
     matchLogs.log(matchId, "auction_seen", {
       auctionId,
       letter,
-      round: match?.currentRound,
-      bagTotal: match?.bagTotal,
+      round: state.round,
+      bagTotal: state.bagTotal,
       opensAtMs,
       seenMs,
       recvLagMs: opensAtMs !== undefined ? seenMs - opensAtMs : undefined,
@@ -233,7 +220,7 @@ function tryBid(
     auctionId,
     letter,
     amount,
-    balance: participant.balance,
+    balance: state.myBalance,
     rack: Object.fromEntries(rack),
     decideMs: Math.round(decideMs * 1000) / 1000,
     ...sinceOpen(sendMs, opensAtMs, seenMs),
@@ -253,26 +240,26 @@ function tryPlayWord(conn: DbConnection) {
   if (myBotId === null) return;
   // Only matches still being played. The bot keeps its letters from
   // matches that have ended, but can't play them.
-  const matches = new Map<bigint, number>(); // matchId -> bagTotal
+  const matches: bigint[] = [];
   for (const p of conn.db.matchParticipant.iter()) {
     if (p.botId !== myBotId) continue;
     const m = conn.db.matchState.id.find(p.matchId);
-    if (m?.status.tag === "Running") matches.set(p.matchId, Number(m.bagTotal));
+    if (m?.status.tag === "Running") matches.push(p.matchId);
   }
   const rackKey = (r: Map<string, number>) =>
     [...r].filter(([, n]) => n > 0).map(([c, n]) => c + n).sort().join("");
-  for (const [matchId, bagTotal] of matches) {
+  for (const matchId of matches) {
     const key = String(matchId);
     const seen = playedRackStates.get(key) ?? new Set<string>();
     playedRackStates.set(key, seen);
-    const rack = rackForMatch(conn, matchId);
+    const state = matchStateFromConn(conn, matchId, myBotId);
+    if (!state) continue;
+    const rack = state.myRack;
     if (seen.has(rackKey(rack))) continue;
-    const participant = participantForMatch(conn, matchId);
-    if (!participant) continue;
     const words = choosePlay({
       rack,
-      balance: participant.balance,
-      auctionsLeft: bagTotal + 1,
+      balance: state.myBalance,
+      auctionsLeft: state.auctionsLeft,
       index: WORD_INDEX,
     });
     if (words.length === 0) continue;
