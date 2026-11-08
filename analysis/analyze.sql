@@ -99,3 +99,25 @@ SELECT CASE WHEN LENGTH(word) <= 3 THEN '2-3' WHEN LENGTH(word) <= 5 THEN '4-5'
        COUNT(*) AS n, ROUND(AVG(total_reward), 1) AS reward,
        ROUND(1.0 * SUM(total_reward) / SUM(LENGTH(word)), 2) AS pts_per_tile
 FROM word_play JOIN recent2 USING (match_id) GROUP BY len;
+
+-- ---------- 6. Winning bids per letter and phase (S2-1, exported to bot/src/prices.json) ----------
+-- Winning bid = top bid of a sold auction. Same sample as above, 68-auction matches,
+-- last auction excluded. Nearest-rank percentiles: the value at rank ceil(p/100 * n).
+-- phase 'all' = rounds 1-67, used as the fallback for thin cells by analysis/export_prices.py.
+WITH s AS (
+  SELECT letter, top_bid,
+         CASE WHEN rnd <= 20 THEN 'early' WHEN rnd <= 48 THEN 'mid' ELSE 'late' END AS phase
+  FROM auc JOIN recent2 USING (match_id) JOIN match_state ms ON ms.id = auc.match_id
+  WHERE n_rounds = 68 AND rnd <= 67 AND winner_bot_id IS NOT NULL AND ms.auction_type = 'vickrey'),
+u AS (SELECT letter, phase, top_bid FROM s UNION ALL SELECT letter, 'all', top_bid FROM s),
+x AS (
+  SELECT letter, phase, top_bid,
+         ROW_NUMBER() OVER (PARTITION BY letter, phase ORDER BY top_bid) AS rn,
+         COUNT(*) OVER (PARTITION BY letter, phase) AS cnt
+  FROM u)
+SELECT letter, phase, cnt AS n,
+       MAX(CASE WHEN rn = (25 * cnt + 99) / 100 THEN top_bid END) AS p25,
+       MAX(CASE WHEN rn = (50 * cnt + 99) / 100 THEN top_bid END) AS p50,
+       MAX(CASE WHEN rn = (75 * cnt + 99) / 100 THEN top_bid END) AS p75,
+       MAX(CASE WHEN rn = (90 * cnt + 99) / 100 THEN top_bid END) AS p90
+FROM x GROUP BY letter, phase ORDER BY letter, phase;

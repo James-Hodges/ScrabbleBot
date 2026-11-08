@@ -96,6 +96,27 @@ LUCENT and Bron are clearly ahead. How they play:
 - **They hold letters, then play long words.** About half their words come after round 48, and only 14–19% come in the first 20 rounds.
 - **They still waste coins.** Bron finishes with 52 unspent coins on average, LUCENT with 28.
 
+## 6. Winning bids per letter and phase
+
+Top bid of each sold auction, median / 90th percentile, from `analyze.sql` §6 (exported to `bot/src/prices.json` by `analysis/export_prices.py`). Rerun on 2026-11-07 with fresher data: 1,063 matches (Nov 5–8, 4+ real bots, 68 auctions), 71,212 sold auctions in rounds 1–67. Every cell has 180+ samples.
+
+| Letter | Rounds 1–20 | 21–48 | 49–67 |
+|---|---|---|---|
+| Z | 43 / 57 | 38 / 54 | 33 / 50 |
+| X | 35 / 46 | 32 / 43 | 32 / 46 |
+| Q, J | 33–34 / 45–48 | 30–31 / 40–44 | 25–29 / 44–46 |
+| K | 25 / 33 | 24 / 31 | 26 / 40 |
+| H, Y | 22 / 29–31 | 21 / 28 | 24–25 / 37–39 |
+| F, W, V | 20–21 / 26–28 | 17–19 / 24–26 | 19–22 / 29–35 |
+| C, M, P, B | 17–18 / 23–25 | 16–18 / 22–26 | 20–21 / 32–36 |
+| D, G | 14–15 / 19–21 | 13–14 / 18–19 | 15–17 / 28–30 |
+| S | 12 / 19 | 12 / 17 | 16 / 27 |
+| 1-point letters (E A R L U N O I T) | 10–12 / 17–23 | 10–11 / 15–19 | 12–15 / 25–28 |
+
+- **Winning bids average 15.4 against 10.9 paid**, so the winner outbids second place by about 4.5 coins. For an E the median winning bid is 12, while the median price paid is 7.
+- **Late rounds get more spread out, not cheaper.** For common letters the median rises by 3–4 and the 90th percentile by about 10 in rounds 49–67, as some bots dump coins. The 25th percentile only rises by about 2–3 (E: 8 → 11), so cheaper late letters are still around.
+- **The big letters go the other way:** Z and Q get cheaper late (Z median 43 → 33), probably because fewer bots can still fit them into a word.
+
 ## What this means for our bot
 
 1. **Value tiles by how many we can get, not by face value.** Winning is about tile count and long words. Bid on many letters at or below their median price rather than fighting for a few.

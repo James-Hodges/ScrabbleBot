@@ -98,7 +98,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S1-5 | Hold letters for long words | James | [x] |
 | S1-6 | Empty the rack before the end | James | [x] |
 | S1-7 | Subscribe only to our own matches (fixes out-of-memory crash) | James | [x] |
-| S2-1 | Winning-bid table per letter and phase | ooVrq | [ ] |
+| S2-1 | Winning-bid table per letter and phase | ooVrq | [x] |
 | S2-2 | Letter valuation | James | [ ] |
 | S2-3 | Bid formula | | [ ] |
 | S2-4 | Spend down coins | | [ ] |
