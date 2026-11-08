@@ -23,6 +23,7 @@ import {
   DbConnection,
   type EventContext,
   type ErrorContext,
+  type SubscriptionHandle,
 } from "./module_bindings/index.js";
 import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
@@ -31,6 +32,13 @@ import { decideBid } from "./strategy.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 import { choosePlay } from "./play.js";
 import { WordIndex } from "./words.js";
+import {
+  baseQueries,
+  coreQueries,
+  liveFloorMicros,
+  liveQueries,
+  type MatchTimes,
+} from "./subscriptions.js";
 
 const HOST = process.env.STDB_HOST ?? "https://maincloud.spacetimedb.com";
 const DB_NAME = process.env.STDB_DB ?? "scrabblebot";
@@ -288,10 +296,13 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
   saveToken(token);
   console.log(`[${BOT_NAME}] connected as ${identity.toHexString()}`);
 
+  const subscribeStart = Date.now();
   conn
     .subscriptionBuilder()
     .onApplied(() => {
-      console.log(`[${BOT_NAME}] subscription applied`);
+      console.log(
+        `[${BOT_NAME}] subscription applied (${Date.now() - subscribeStart} ms, ${rssMb()} MB rss)`,
+      );
 
       // Resolve our bot id, possibly after claiming a nonce.
       myBotId = resolveMyBotId(conn);
@@ -314,7 +325,7 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
             console.log(
               `[${BOT_NAME}] claimed credential for bot '${bot?.name ?? "?"}' (id ${myBotId})`,
             );
-            bootstrapActivity(conn);
+            subscribeToOurMatches(conn);
           }, 1000);
           return;
         } else {
@@ -329,9 +340,10 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
       console.log(
         `[${BOT_NAME}] acting as bot '${bot?.name ?? "?"}' (id ${myBotId})`,
       );
-      bootstrapActivity(conn);
+      subscribeToOurMatches(conn);
     })
-    .subscribeToAllTables();
+    .onError(subscriptionError("base"))
+    .subscribe(baseQueries());
 
   conn.db.auction.onInsert((_ctx: EventContext, a) => {
     if (a.status.tag === "Open")
@@ -344,8 +356,8 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
   });
   conn.db.auctionResult.onInsert((_ctx, r) => {
     if (myBotId === null) return;
-    // We subscribe to every table, so this fires for every match on the
-    // server. Only print and log our own matches.
+    // We only subscribe to our own matches, but keep the check in case a
+    // subscription ever returns more.
     if (!inMatch(conn, r.matchId)) return;
     const winner =
       r.winnerBotId !== undefined && r.winnerBotId !== null
@@ -404,9 +416,87 @@ function onConnect(conn: DbConnection, identity: Identity, token: string) {
       if (wasIn) {
         console.log(`[${BOT_NAME}] match ${neu.id} ended; rejoining lobby`);
         joinLobby(conn);
+        // Drop the ended match's auctions, results and words from the cache.
+        subscribeLive(conn);
       }
     }
   });
+}
+
+function rssMb(): number {
+  return Math.round(process.memoryUsage().rss / 1e6);
+}
+
+function subscriptionError(what: string) {
+  return (_ctx: ErrorContext, err?: Error) =>
+    console.error(
+      `[${BOT_NAME}] ${what} subscription failed: ${err?.message ?? "unknown error"}`,
+    );
+}
+
+// S1-7: after the bot id is known, subscribe to our matches only (see
+// subscriptions.ts): first the core set (our match states, their
+// participants, our lobbies), then the live set (auctions, results, words)
+// with a floor computed from those match states. Start playing once both
+// are applied.
+let coreSubscribed = false;
+function subscribeToOurMatches(conn: DbConnection) {
+  if (myBotId === null || coreSubscribed) return;
+  coreSubscribed = true;
+  const start = Date.now();
+  conn
+    .subscriptionBuilder()
+    .onApplied(() => {
+      console.log(
+        `[${BOT_NAME}] match subscription applied (${Date.now() - start} ms, ${rssMb()} MB rss)`,
+      );
+      subscribeLive(conn, () => {
+        console.log(
+          `[${BOT_NAME}] live subscription applied (${Date.now() - start} ms, ${rssMb()} MB rss)`,
+        );
+        bootstrapActivity(conn);
+      });
+    })
+    .onError(subscriptionError("match"))
+    .subscribe(coreQueries(myBotId));
+}
+
+function ourMatchTimes(conn: DbConnection): MatchTimes[] {
+  const out: MatchTimes[] = [];
+  for (const p of conn.db.matchParticipant.iter()) {
+    if (p.botId !== myBotId) continue;
+    const m = conn.db.matchState.id.find(p.matchId);
+    if (!m) continue;
+    out.push({
+      running: m.status.tag === "Running",
+      createdAtMicros: m.createdAt.microsSinceUnixEpoch,
+      startedAtMicros: m.startedAt?.microsSinceUnixEpoch,
+      endedAtMicros: m.endedAt?.microsSinceUnixEpoch,
+    });
+  }
+  return out;
+}
+
+// The live set is replaced after each of our matches ends. The new set is
+// subscribed first and the old one dropped once the new one is applied, so
+// there's no gap; rows in both are reference-counted by the SDK and don't
+// fire onInsert again.
+let liveHandle: SubscriptionHandle | null = null;
+function subscribeLive(conn: DbConnection, onReady?: () => void) {
+  if (myBotId === null) return;
+  const prev = liveHandle;
+  const floor = liveFloorMicros(ourMatchTimes(conn));
+  const handle: SubscriptionHandle = conn
+    .subscriptionBuilder()
+    .onApplied(() => {
+      if (prev?.isActive()) prev.unsubscribe();
+      // Superseded by a newer live set while this one was being applied.
+      if (liveHandle !== handle && handle.isActive()) handle.unsubscribe();
+      onReady?.();
+    })
+    .onError(subscriptionError("live"))
+    .subscribe(liveQueries(myBotId, floor));
+  liveHandle = handle;
 }
 
 function joinLobby(conn: DbConnection) {
