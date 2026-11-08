@@ -107,6 +107,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S3-1 | Benchmark script | ooVrq | [x] |
 | S3-2 | Tune bid and play numbers | | [ ] |
 | S3-3 | Tag a version only when better | | [ ] |
+| S3-4 | λ bidding (K-13 style), on branch `experiment/lambda` | James | [ ] |
 | B-1 | Register for the tournament | | [ ] |
 | B-2 | Deny letters to the leader | | [ ] |
 | B-3 | Push up rivals' prices | | [ ] |
@@ -168,6 +169,7 @@ Priority uses MoSCoW: **M** = must, **S** = should, **C** = could. Estimates are
 | S3-1 | As a team, we compare our matches with the benchmarks. | A script reads our logs (or re-pulls the database) and prints our numbers next to the benchmark table. | 20 | M | ooVrq |
 | S3-2 | As a team, we tune the bid and play numbers. | At least 10 live matches. Adjust the price percentile, spend pace and play thresholds one at a time, and note each change and result in a short log at the bottom of this file. | 40 | M | both |
 | S3-3 | As a team, we tag a version only when it's better. | A new bot version resets rating to 1500, so tag only when 10+ matches show a clear improvement in average place. | 5 | M | James |
+| S3-4 | As the bot, I set bids from a per-match points-per-coin rate (λ) and the likely highest rival bid. | λ is re-solved each auction so planned bids spend our coins plus expected word income by the end; the bid maximises P(win) × value − λ × expected price, using the distribution of the highest rival bid per letter and match stage built from the archive. Switchable against the current bidding (`BID_MODE`). Built on `experiment/lambda` from `improved-bot` so it doesn't collide with the bomb-first work; compared side by side over 10+ matches each. Idea from the public K-13 write-up (our own implementation). | 90 | S | James |
 
 ### Buffer and stretch goals
 
