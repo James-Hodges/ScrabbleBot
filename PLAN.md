@@ -101,8 +101,8 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S2-1 | Winning-bid table per letter and phase | ooVrq | [x] |
 | S2-2 | Letter valuation | James | [ ] |
 | S2-3 | Bid formula | | [ ] |
-| S2-4 | Spend down coins | | [ ] |
-| S2-5 | Skip the last auction | | [ ] |
+| S2-4 | Spend down coins | ooVrq | [ ] |
+| S2-5 | Skip the last auction | ooVrq | [ ] |
 | S2-6 | Early coin snowball | | [ ] |
 | S3-1 | Benchmark script | | [ ] |
 | S3-2 | Tune bid and play numbers | | [ ] |
