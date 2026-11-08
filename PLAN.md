@@ -104,7 +104,7 @@ The main sessions update this board: claim a story by putting your name in Owner
 | S2-4 | Spend down coins | ooVrq | [ ] |
 | S2-5 | Skip the last auction | ooVrq | [ ] |
 | S2-6 | Early coin snowball | | [ ] |
-| S3-1 | Benchmark script | | [ ] |
+| S3-1 | Benchmark script | ooVrq | [ ] |
 | S3-2 | Tune bid and play numbers | | [ ] |
 | S3-3 | Tag a version only when better | | [ ] |
 | B-1 | Register for the tournament | | [ ] |
