@@ -253,6 +253,7 @@ function tryBid(
         missing,
         targetOk: (table.target?.reward ?? 0) >= table.minReward,
         completes: bid.reason === "completes_bingo" || bid.reason === "completes_snowball",
+        rackTiles: [...rack.values()].reduce((a, n) => a + n, 0),
       }
     : undefined;
   const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter, reserveCoins, bomb });

@@ -53,20 +53,27 @@ export const BOMB_RESERVE_PER_TILE = 6;
  * mostly on non-target letters at p75/p90, paying 14–18 per tile vs ~9.
  */
 /** Normal per-letter cap: at most this share of the current balance... */
-export const BOMB_LETTER_SHARE = 0.18;
+export const BOMB_LETTER_SHARE = 0.3;
 /** ...and at most this market percentile of the letter's winning bid. */
-export const BOMB_MARKET_PCT: Pct = 50;
+export const BOMB_MARKET_PCT: Pct = 75;
 /** A target letter leaving at most this many tiles missing counts as near-complete. */
 export const BOMB_NEAR_MISSING = 2;
 /** Near-complete cap: at most this share of the current balance (rawBid's market cap still applies). */
 export const BOMB_NEAR_SHARE = 0.5;
 /** Coins kept unspent until the target is within BOMB_NEAR_MISSING tiles of complete. */
-export const BOMB_KEEP_COINS = 38;
+export const BOMB_KEEP_COINS = 25;
+/**
+ * The floor only binds once the rack has this many tiles (5 starting + ~5 won)
+ * or from BOMB_FLOOR_ROUND on: before that there is nothing to finish yet, so
+ * holding coins back only stalls the build (live 46593 froze at 38 coins).
+ */
+export const BOMB_FLOOR_MIN_RACK = 10;
+export const BOMB_FLOOR_ROUND = 35;
 /**
  * Below the floor we still bid up to this share of the balance on a letter,
  * so a far target never leaves us bidding 0 on everything (the old stuck state).
  */
-export const BOMB_BELOW_FLOOR_SHARE = 0.1;
+export const BOMB_BELOW_FLOOR_SHARE = 0.15;
 /** The bomb reserve never exceeds this share of our balance (so it can't starve us). */
 export const BOMB_RESERVE_MAX_SHARE = 0.5;
 /**
@@ -100,6 +107,8 @@ export interface BombBidInput {
   targetOk: boolean;
   /** This letter completes a word we would play now (e.g. rawBid's completes_bingo). */
   completes: boolean;
+  /** Tiles in our rack now (gates the coin floor). Default: floor always armed. */
+  rackTiles?: number;
 }
 
 /** Whether the open letter completes or nearly completes a qualifying target. */
@@ -112,8 +121,9 @@ export function bombNear(b: BombBidInput, letter: string): boolean {
 /**
  * Bomb-phase cap on one bid. Returns the amount and which rule bound it.
  *   near-complete letter: ≤ BOMB_NEAR_SHARE × balance            ("bomb_near")
- *   otherwise:            ≤ min(BOMB_LETTER_SHARE × balance, p50) ("bomb_cap")
- *   target further than BOMB_NEAR_MISSING tiles: keep BOMB_KEEP_COINS ("bomb_floor"),
+ *   otherwise:            ≤ min(BOMB_LETTER_SHARE × balance, p75) ("bomb_cap")
+ *   target further than BOMB_NEAR_MISSING tiles, once armed (rack ≥ BOMB_FLOOR_MIN_RACK
+ *   tiles or round ≥ BOMB_FLOOR_ROUND): keep BOMB_KEEP_COINS ("bomb_floor"),
  *   but still allow BOMB_BELOW_FLOOR_SHARE × balance; never for a near-complete letter.
  */
 export function bombCap(
@@ -146,7 +156,8 @@ export function bombCap(
     reason = "bomb_cap";
   }
   const far = !b.targetOk || b.missing.length > BOMB_NEAR_MISSING;
-  if (far && amount > balance - BOMB_KEEP_COINS) {
+  const armed = (b.rackTiles ?? Infinity) >= BOMB_FLOOR_MIN_RACK || round >= BOMB_FLOOR_ROUND;
+  if (far && armed && amount > balance - BOMB_KEEP_COINS) {
     amount = Math.min(amount, Math.max(balance - BOMB_KEEP_COINS, Math.floor(balance * BOMB_BELOW_FLOOR_SHARE)));
     reason = "bomb_floor";
   }
