@@ -11,6 +11,8 @@ import {
   HIGH_TILE_VALUE,
   RACK_FLOOR_POINTS,
   TARGET_TILE_SHARE,
+  auctionTarget,
+  ON_BLOCK_MIN_GAIN_POINTS,
   planValues,
   targetMissing,
   targetValues,
@@ -140,4 +142,51 @@ test("bomb reserve keeps coins for the target's remaining letters", () => {
   // The spend-down window ignores the reserve.
   const late = { ...ctx, auctionsLeft: SPEND_DOWN_AUCTIONS, reserveCoins: 18 };
   assert.notEqual(applyBudget(25, late).reason, "reserve");
+});
+
+// The open letter is out of the unseen pool. With the last Z on the block the
+// rack's own target forgets every Z word; the auction target must not.
+const planOnBlock = (r: string, open: string, auctionsLeft: number) => {
+  const p = pool(r);
+  p.set(open, 0); // the last copy is the one on the block
+  return planValues({ rack: rack(r), pool: p, auctionsLeft, index, explain: true, hasPlayedWord: false });
+};
+
+test("last Z on the block: the auction target keeps the Z and the reserve exempts it", () => {
+  const r = "HYPNOTIES"; // HYPNOTIZES needs only the Z
+  const t = planOnBlock(r, "Z", 40);
+  assert.equal(t.phase, "bomb");
+  assert.ok(!t.target || !t.target.word.includes("Z"), `rack target ${t.target?.word} should not need the gone Z`);
+  const { target, source } = auctionTarget(t, "Z");
+  assert.equal(source, "on_block");
+  assert.ok(target && target.word.includes("Z") && target.reward >= BOMB_MIN_REWARD, target?.word);
+  const missing = targetMissing(target, rack(r));
+  assert.ok(missing.includes("Z"), missing);
+  assert.equal(bombReserve(missing, "Z"), (missing.length - 1) * BOMB_RESERVE_PER_TILE);
+  // Before the fix the reserve counted the rack target's tiles and not the Z.
+  const old = targetMissing(t.target, rack(r));
+  assert.ok(bombReserve(missing, "Z") <= bombReserve(old, "Z"), `${missing} vs ${old}`);
+});
+
+test("auction target is the rack's target when the open letter adds no EV", () => {
+  const t = plan("JUKEBO", 50);
+  assert.ok(t.target);
+  for (const L of LETTERS) {
+    const { target, source } = auctionTarget(t, L);
+    const won = t.ifWon[L.charCodeAt(0) - 65];
+    const ev = (x: typeof target) => (x ? x.reward * x.prob : 0);
+    if (source === "rack") {
+      assert.equal(target, t.target);
+      assert.ok(!won || ev(won) < ev(t.target) + ON_BLOCK_MIN_GAIN_POINTS, L);
+    } else {
+      assert.equal(target, won);
+      assert.ok(ev(target) >= ev(t.target) + ON_BLOCK_MIN_GAIN_POINTS, L);
+      // The on-block target uses the letter beyond what the rack holds.
+      assert.ok(targetMissing(target, rack("JUKEBO")).includes(L), `${L} ${target?.word}`);
+      assert.equal(target!.missing, targetMissing(target, rack("JUKEBO")).length, `${L} ${target?.word}`);
+    }
+  }
+  // No rack target and no candidates: rack source, null target.
+  const empty = { target: null, ifWon: new Array(26).fill(null) };
+  assert.deepEqual(auctionTarget(empty, "E"), { target: null, source: "rack" });
 });

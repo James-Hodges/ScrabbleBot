@@ -29,7 +29,7 @@ import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { rawBid as decideRawBid, completesTarget } from "./bid.js";
-import { planValues, targetMissing, type PlanTable } from "./target.js";
+import { auctionTarget, planValues, targetMissing, type PlanTable } from "./target.js";
 import { applyBudget, bombReserve } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 import { choosePlay, minRewardFor } from "./play.js";
@@ -227,7 +227,10 @@ function tryBid(
   // Bomb rework: values also count long target words, gated by the play phase.
   const played = hasPlayedWord(state);
   const table = valueTableFor(matchId, state, played);
-  const missing = targetMissing(table.target, rack);
+  // The target if we win this letter, when better: the open letter is out of
+  // the unseen pool, so table.target alone forgets the tile on the block.
+  const { target, source: targetSource } = auctionTarget(table, letter);
+  const missing = targetMissing(target, rack);
   // S2-3: market-anchored bid with bingo & early snowball detection.
   const bid = decideRawBid({
     letter,
@@ -294,10 +297,11 @@ function tryBid(
     balance: state.myBalance,
     rack: Object.fromEntries(rack),
     playPhase: table.phase,
-    target: table.target?.word,
-    targetReward: table.target?.reward,
+    target: target?.word,
+    targetReward: target?.reward,
     targetMissing: missing || undefined,
-    targetProb: table.target ? Math.round(table.target.prob * 1000) / 1000 : undefined,
+    targetProb: target ? Math.round(target.prob * 1000) / 1000 : undefined,
+    targetSource: target ? targetSource : undefined,
     reserveCoins,
     valueFloor: table.floor,
     decideMs: Math.round(decideMs * 1000) / 1000,

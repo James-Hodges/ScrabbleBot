@@ -62,6 +62,14 @@ export const SMALL_RACK_TILES = 6;
 export const RACK_FLOOR_POINTS = 2;
 /** Near the endgame, value.ts counts every word (it will be played in the endgame dump). */
 export const VALUE_ENDGAME_LOOKAHEAD = 2;
+/**
+ * The open letter is already out of the unseen pool, so the rack's own best
+ * target drops any word that needs it (the last Z on the block makes every
+ * Z word look impossible). For the auction's target (logs + bomb reserve) we
+ * instead use the best target if we win the open letter, when that beats the
+ * rack's own target EV by at least this many points.
+ */
+export const ON_BLOCK_MIN_GAIN_POINTS = 0.5;
 
 const MAX_POOL = 16;
 
@@ -81,6 +89,11 @@ export interface TargetTable {
   base: number;
   /** The best target for the rack itself, or null when none is reachable. */
   target: TargetWord | null;
+  /**
+   * ifWon[L]: the best target for rack + L (its `missing` still counts L),
+   * or null when L is in no reachable candidate. EV = reward × prob.
+   */
+  ifWon: (TargetWord | null)[];
 }
 
 /**
@@ -190,7 +203,7 @@ export function targetValues(ctx: TargetContext): TargetTable {
   let N = 0;
   for (let i = 0; i < 26; i++) N += pool[i];
   const f = N > 0 && T > 0 ? (ctx.winRate ?? TARGET_WIN_RATE) * Math.min(1, T / N) : 0;
-  if (f <= 0) return { values, base: 0, target: null };
+  if (f <= 0) return { values, base: 0, target: null, ifWon: new Array(26).fill(null) };
 
   const W = MAX_POOL + 1;
   const tail = tailTable(f);
@@ -211,6 +224,9 @@ export function targetValues(ctx: TargetContext): TargetTable {
   let bestAt = -1;
   let bestProb = 0;
   const withL = new Float64Array(26);
+  const withLAt = new Int32Array(26).fill(-1);
+  const withLK = new Int32Array(26);
+  const withLProb = new Float64Array(26);
   const { rewards, start, letters, counts } = cs;
   const n = rewards.length;
   const needL = new Uint8Array(26);
@@ -258,7 +274,12 @@ export function targetValues(ctx: TargetContext): TargetTable {
       if (zeros === 1 && L !== zeroAt) continue;
       const pL = (zeros === 1 ? prob : prob / tOld[L]) * tl[L * W + needL[L] - 1];
       const ev = dk * pL;
-      if (ev > withL[L]) withL[L] = ev;
+      if (ev > withL[L]) {
+        withL[L] = ev;
+        withLAt[L] = w;
+        withLK[L] = k;
+        withLProb[L] = pL * discount[k - 1 < 0 ? 0 : k - 1];
+      }
     }
   }
 
@@ -270,12 +291,39 @@ export function targetValues(ctx: TargetContext): TargetTable {
       if (counts[j] > rack[L] && values[L] < share) values[L] = share;
     }
   }
+  const ifWon: (TargetWord | null)[] = new Array(26).fill(null);
+  for (let L = 0; L < 26; L++) {
+    const w = withLAt[L];
+    if (w >= 0) ifWon[L] = { word: cs.words[w], reward: rewards[w], missing: withLK[L], prob: withLProb[L] };
+  }
   return {
     values,
     base,
     target:
       bestAt >= 0 ? { word: cs.words[bestAt], reward: rewards[bestAt], missing: bestK, prob: bestProb } : null,
+    ifWon,
   };
+}
+
+/** Which target an auction is bid against (see ON_BLOCK_MIN_GAIN_POINTS). */
+export type TargetSource = "rack" | "on_block";
+
+/**
+ * The target for the auction on `letter`: the best target if we win it when
+ * that beats the rack's own target by ON_BLOCK_MIN_GAIN_POINTS of EV, else
+ * the rack's target. Keeps the tile on the block in `targetMissing`, so the
+ * bomb reserve (which exempts the open letter) does not hold back coins from
+ * the very tile the target needs.
+ */
+export function auctionTarget(
+  table: Pick<PlanTable, "target" | "ifWon">,
+  letter: string,
+): { target: TargetWord | null; source: TargetSource } {
+  const i = letter.toUpperCase().charCodeAt(0) - 65;
+  const won = i >= 0 && i < 26 ? table.ifWon[i] : null;
+  const ev = (t: TargetWord | null) => (t ? t.reward * t.prob : 0);
+  if (won && ev(won) >= ev(table.target) + ON_BLOCK_MIN_GAIN_POINTS) return { target: won, source: "on_block" };
+  return { target: table.target, source: "rack" };
 }
 
 /** A value table that also says which phase and target it was built for. */
@@ -287,6 +335,8 @@ export interface PlanTable extends ValueTable {
   floor: number;
   /** Long target word for the rack, if any. */
   target: TargetWord | null;
+  /** Best long target for rack + L, per letter (see TargetTable.ifWon). */
+  ifWon: (TargetWord | null)[];
 }
 
 export interface PlanContext extends Omit<ValueContext, "minReward"> {
@@ -306,6 +356,7 @@ export function planValues(ctx: PlanContext): PlanTable {
   const table = letterValues({ ...ctx, minReward: nearEnd ? 0 : minReward });
 
   let target: TargetWord | null = null;
+  let ifWon: (TargetWord | null)[] = new Array(26).fill(null);
   let floor = 0;
   if (phase !== "endgame" && ctx.auctionsLeft > 1) {
     const tt = targetValues({
@@ -321,6 +372,7 @@ export function planValues(ctx: PlanContext): PlanTable {
     if (!tt.target && minReward >= BOMB_MIN_REWARD)
       tt2 = targetValues({ rack: ctx.rack, pool: ctx.pool, auctionsLeft: ctx.auctionsLeft, index: ctx.index, bomb: false });
     target = tt2.target;
+    ifWon = tt2.ifWon;
     for (let i = 0; i < 26; i++) if (tt2.values[i] > table.values[i]) table.values[i] = tt2.values[i];
 
     let tiles = 0;
@@ -330,7 +382,7 @@ export function planValues(ctx: PlanContext): PlanTable {
       for (let i = 0; i < 26; i++) if (table.values[i] < floor) table.values[i] = floor;
     }
   }
-  return { ...table, phase, minReward, floor, target };
+  return { ...table, phase, minReward, floor, target, ifWon };
 }
 
 /** Tiles of `target` not covered by `rack` ("" when no target). */
