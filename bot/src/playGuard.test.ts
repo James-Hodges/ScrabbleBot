@@ -2,8 +2,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BOMB_DEADLINE_AUCTIONS, ENDGAME_AUCTIONS, choosePlay, removeWord } from "./play.js";
-import { PlayGuard, playPhase, rackKey } from "./playGuard.js";
+import { ENDGAME_AUCTIONS, choosePlay, removeWord } from "./play.js";
+import { PlayGuard, playKey, playPhase, rackKey } from "./playGuard.js";
 import { WordIndex, type Rack } from "./words.js";
 
 const rack = (letters: string): Rack => {
@@ -14,12 +14,18 @@ const rack = (letters: string): Rack => {
 
 const small = new WordIndex(["CAT", "AT", "TACT", "SCATTER", "CATS", "QAZ", "QI", "ZOAE"]);
 
-test("playPhase: endgame beats played-word state beats the deadline", () => {
+test("playPhase: endgame beats played-word state", () => {
   assert.equal(playPhase(ENDGAME_AUCTIONS, false), "endgame");
   assert.equal(playPhase(ENDGAME_AUCTIONS, true), "endgame");
   assert.equal(playPhase(ENDGAME_AUCTIONS + 1, true), "post_bomb");
-  assert.equal(playPhase(BOMB_DEADLINE_AUCTIONS, false), "bomb_late");
-  assert.equal(playPhase(BOMB_DEADLINE_AUCTIONS + 1, false), "bomb");
+  assert.equal(playPhase(ENDGAME_AUCTIONS + 1, false), "bomb");
+});
+
+test("playKey carries the rounded cutoff in the bomb phase only", () => {
+  assert.equal(playKey("bomb", 47.4), "bomb@47");
+  assert.equal(playKey("bomb", 47.6), "bomb@48");
+  assert.equal(playKey("post_bomb", 47.6), "post_bomb");
+  assert.equal(playKey("endgame"), "endgame");
 });
 
 test("rackKey ignores order and zero counts", () => {
@@ -45,13 +51,15 @@ test("unchanged rack is skipped in the same phase, re-evaluated when the endgame
   assert.equal(g.shouldEvaluate(r, phase), false);
 });
 
-test("unchanged rack is re-evaluated at the bomb deadline and after our first word", () => {
+test("unchanged rack is re-evaluated when the cutoff moves and after our first word", () => {
   const g = new PlayGuard();
   const r = rack("CAT");
-  g.record(r, playPhase(40, false), []);
-  assert.equal(g.shouldEvaluate(r, playPhase(39, false)), false);
-  assert.ok(g.shouldEvaluate(r, playPhase(BOMB_DEADLINE_AUCTIONS, false)));
-  assert.ok(g.shouldEvaluate(r, playPhase(40, true)));
+  g.record(r, playKey("bomb", 52.2), []);
+  // Same rounded cutoff (balance or round changed without moving it): skip.
+  assert.equal(g.shouldEvaluate(r, playKey("bomb", 51.8)), false);
+  // Cutoff moved (time passed, or we got poorer): re-run.
+  assert.ok(g.shouldEvaluate(r, playKey("bomb", 45)));
+  assert.ok(g.shouldEvaluate(r, playKey("post_bomb")));
 });
 
 test("our own in-flight words are never resubmitted, in any phase", () => {
@@ -64,7 +72,7 @@ test("our own in-flight words are never resubmitted, in any phase", () => {
   // phase (a landing word's reward can change the phase).
   const r = new Map(r0);
   for (let i = 0; i < words.length; i++) {
-    for (const p of ["endgame", "bomb", "bomb_late", "post_bomb"] as const)
+    for (const p of ["endgame", "bomb", "bomb@30", "bomb@60", "post_bomb"])
       assert.equal(g.shouldEvaluate(r, p), false, `${rackKey(r)} ${p}`);
     removeWord(r, words[i]);
   }

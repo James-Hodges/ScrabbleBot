@@ -141,3 +141,10 @@ test("bomb reserve keeps coins for the target's remaining letters", () => {
   const late = { ...ctx, auctionsLeft: SPEND_DOWN_AUCTIONS, reserveCoins: 18 };
   assert.notEqual(applyBudget(25, late).reason, "reserve");
 });
+
+test("bomb reserve scales with affordShare and never exceeds half the balance", () => {
+  assert.equal(bombReserve("XESTR", "Q", 100, 1), 5 * BOMB_RESERVE_PER_TILE);
+  assert.equal(bombReserve("XESTR", "Q", 100, 0.5), Math.floor(2.5 * BOMB_RESERVE_PER_TILE));
+  assert.equal(bombReserve("XESTR", "Q", 20, 1), 10);
+  assert.equal(bombReserve("XESTR", "Q", 3, 0), 0);
+});

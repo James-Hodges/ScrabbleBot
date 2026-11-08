@@ -47,6 +47,8 @@ export const MIN_RESERVE_PER_AUCTION = 1;
 export const ALL_IN_AUCTIONS = 2;
 /** Before the bomb lands, coins kept back per target tile still to buy. */
 export const BOMB_RESERVE_PER_TILE = 6;
+/** The bomb reserve never exceeds this share of our balance (so it can't starve us). */
+export const BOMB_RESERVE_MAX_SHARE = 0.5;
 /**
  * Market percentile by non-last auctions left: the first row whose
  * `minSpendable` is ≤ spendable wins. Higher percentiles as time runs out.
@@ -71,11 +73,14 @@ export interface BudgetContext {
 
 /**
  * Coins to keep for the bomb target: BOMB_RESERVE_PER_TILE per tile still
- * missing, not counting the open letter when it is one of them.
+ * missing, not counting the open letter when it is one of them, scaled by
+ * affordShare (a target we can't afford isn't worth starving for; broke, no
+ * reserve) and capped at BOMB_RESERVE_MAX_SHARE of the balance.
  */
-export function bombReserve(missing: string, letter: string): number {
+export function bombReserve(missing: string, letter: string, balance = Infinity, affordShare = 1): number {
   const n = missing.length - (missing.includes(letter.toUpperCase()) ? 1 : 0);
-  return Math.max(0, n) * BOMB_RESERVE_PER_TILE;
+  const raw = Math.max(0, n) * BOMB_RESERVE_PER_TILE * Math.max(0, Math.min(1, affordShare));
+  return Math.floor(Math.min(raw, Math.max(0, balance) * BOMB_RESERVE_MAX_SHARE));
 }
 
 export type BudgetReason =
