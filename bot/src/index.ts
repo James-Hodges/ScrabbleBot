@@ -28,14 +28,15 @@ import {
 import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { decideBid } from "./strategy.js";
+import { rawBid as decideRawBid, completesTarget } from "./bid.js";
+import { letterValues, type ValueTable } from "./value.js";
 import { applyBudget } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
 import { choosePlay } from "./play.js";
 import { PlayGuard, playPhase } from "./playGuard.js";
 import { WordIndex } from "./words.js";
 import { matchStateFromConn } from "./state.js";
-import { poolCheck } from "./pool.js";
+import { poolCheck, unseenPool } from "./pool.js";
 import {
   baseQueries,
   coreQueries,
@@ -171,6 +172,33 @@ function logFailure(what: string) {
     );
 }
 
+// One ValueTable per match, reused while (rack, auctionsLeft, round) is
+// unchanged: tryBid can run more than once for the same auction.
+const valueCache = new Map<string, { key: string; table: ValueTable }>();
+
+function valueTableFor(
+  matchId: bigint,
+  state: NonNullable<ReturnType<typeof matchStateFromConn>>,
+): ValueTable {
+  const rackKey = [...state.myRack.entries()]
+    .filter(([, n]) => n > 0)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([l, n]) => `${l}${n}`)
+    .join("");
+  const key = `${rackKey}|${state.auctionsLeft}|${state.round}`;
+  const hit = valueCache.get(String(matchId));
+  if (hit && hit.key === key) return hit.table;
+  const table = letterValues({
+    rack: state.myRack,
+    pool: unseenPool(state).unseen,
+    auctionsLeft: state.auctionsLeft,
+    index: WORD_INDEX,
+    explain: true,
+  });
+  valueCache.set(String(matchId), { key, table });
+  return table;
+}
+
 function tryBid(
   conn: DbConnection,
   auctionId: bigint,
@@ -185,13 +213,21 @@ function tryBid(
   const state = matchStateFromConn(conn, matchId, myBotId);
   if (!state) return;
   const rack = state.myRack;
-  // decideMs times decideBid and applyBudget together (the whole decision).
+  // decideMs times valuation, the bid formula and applyBudget together (the whole decision).
   const t0 = performance.now();
-  const rawBid = decideBid({
+  // S2-2: letter values. unseenPool already counts the open auction's letter
+  // as seen, so poolIncludesLetter stays unset.
+  const table = valueTableFor(matchId, state);
+  // S2-3: min(value ceiling, market cap).
+  const bid = decideRawBid({
     letter,
-    myBalance: state.myBalance,
-    myRack: rack,
+    values: table,
+    balance: state.myBalance,
+    auctionsLeft: state.auctionsLeft,
+    round: state.round,
+    completesWord: completesTarget(table, rack, letter),
   });
+  const rawBid = bid.amount;
   // S2-4/S2-5: spend-down pace and never bidding on the last auction.
   const { amount, reason: budgetReason } = applyBudget(rawBid, { ...state, letter });
   const decideMs = performance.now() - t0;
@@ -234,6 +270,11 @@ function tryBid(
     amount,
     rawBid,
     budgetReason,
+    value: Math.round(bid.value * 100) / 100,
+    ceiling: Math.round(bid.ceiling * 100) / 100,
+    marketCap: bid.marketCap,
+    marketPct: bid.pct,
+    bidReason: bid.reason,
     balance: state.myBalance,
     rack: Object.fromEntries(rack),
     decideMs: Math.round(decideMs * 1000) / 1000,
