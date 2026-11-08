@@ -4,9 +4,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   COINS_PER_POINT,
+  EARLY_BOOST,
+  EARLY_MIN_VALUE,
+  EARLY_ROUNDS,
   MIN_VALUE_POINTS,
   completesTarget,
+  nearTarget,
   pctFor,
+  playedLongWord,
   rawBid,
   type RawBidContext,
 } from "./bid.js";
@@ -172,4 +177,129 @@ test("whole decision (letterValues + rawBid) is fast on a 20-tile rack", () => {
   }
   console.log(`  20-tile decision: ${times.map((t) => t.toFixed(1)).join(", ")} ms`);
   assert.ok(Math.max(...times) < 50, `slowest ${Math.max(...times).toFixed(1)} ms`);
+});
+
+// S2-6: early coin snowball.
+
+test("early boost: ceiling × EARLY_BOOST in round ≤ EARLY_ROUNDS without a long word", () => {
+  for (const round of [1, EARLY_ROUNDS]) {
+    const b = rawBid(ctx({ value: 4, round, haveLongWord: false }));
+    assert.equal(b.boost, EARLY_BOOST);
+    assert.equal(b.boostReason, "early");
+    assert.equal(b.ceiling, 4 * COINS_PER_POINT * EARLY_BOOST);
+    // 4 × 2.3 × 1.5 = 13.8 ≥ p50 12 but < 1.25 × 12: market-capped at p50.
+    assert.equal(b.pct, 50);
+    assert.equal(b.amount, 12);
+    // Unboosted it would have been the 9-coin ceiling.
+    assert.equal(rawBid(ctx({ value: 4, round })).amount, Math.round(4 * COINS_PER_POINT));
+  }
+});
+
+test("early boost stops after EARLY_ROUNDS or once we've played a long word", () => {
+  const late = rawBid(ctx({ value: 4, round: EARLY_ROUNDS + 1, haveLongWord: false, nearTarget: true }));
+  assert.equal(late.boost, 1);
+  assert.equal(late.boostReason, "late");
+  assert.equal(late.pct, 50);
+  assert.equal(late.amount, Math.round(4 * COINS_PER_POINT));
+  const done = rawBid(ctx({ value: 4, round: 5, haveLongWord: true, nearTarget: true }));
+  assert.equal(done.boost, 1);
+  assert.equal(done.boostReason, "have_long_word");
+  assert.equal(done.amount, Math.round(4 * COINS_PER_POINT));
+
+  const me = 7n;
+  assert.equal(playedLongWord([], me), false);
+  assert.equal(playedLongWord([{ botId: me, word: "CAT" }, { botId: 8n, word: "RETAINS" }], me), false);
+  assert.equal(playedLongWord([{ botId: me, word: "CAT" }, { botId: me, word: "TRAIN" }], me), true);
+});
+
+test("early boost leaves junk letters at 0 / unboosted", () => {
+  const zero = rawBid(ctx({ value: MIN_VALUE_POINTS / 2, round: 3, haveLongWord: false, nearTarget: true }));
+  assert.equal(zero.amount, 0);
+  assert.equal(zero.reason, "no_value");
+  const low = rawBid(ctx({ value: EARLY_MIN_VALUE - 0.5, round: 3, haveLongWord: false, nearTarget: true }));
+  assert.equal(low.boost, 1);
+  assert.equal(low.boostReason, "low_value");
+  assert.equal(low.pct, 50);
+  assert.equal(low.amount, Math.round((EARLY_MIN_VALUE - 0.5) * COINS_PER_POINT));
+});
+
+test("early near-target letter: percentile one step up", () => {
+  // Boosted ceiling 13.8 alone gives p50; near target bumps to p75 (16).
+  const b = rawBid(ctx({ value: 4, round: 10, haveLongWord: false, nearTarget: true }));
+  assert.equal(b.boostReason, "early_near");
+  assert.equal(b.pct, 75);
+  assert.equal(b.amount, 14); // now the 13.8 ceiling binds, not the market
+  // Already at p75 from the ceiling → p90.
+  const hi = rawBid(ctx({ value: 20 / COINS_PER_POINT, round: 10, haveLongWord: false, nearTarget: true }));
+  assert.equal(hi.pct, 90);
+  assert.equal(hi.amount, 22);
+  // Never above balance.
+  assert.equal(rawBid(ctx({ value: 9, round: 1, haveLongWord: false, nearTarget: true, balance: 7 })).amount, 7);
+});
+
+test("defaults reproduce the pre-S2-6 result", () => {
+  for (const round of [1, 10, 20, 29]) {
+    for (const v of [0.2, 2, 4, 6, 10, 20]) {
+      const old = rawBid(ctx({ value: v, round }));
+      const viaUndefined = rawBid(ctx({ value: v, round, haveLongWord: undefined, nearTarget: true }));
+      assert.equal(old.boost, 1);
+      assert.equal(old.boostReason, "off");
+      assert.equal(old.ceiling, v * COINS_PER_POINT);
+      assert.deepEqual(viaUndefined, old);
+    }
+  }
+});
+
+test("nearTarget: 5+ letter target at most one tile short of rack + letter", () => {
+  const table = {
+    values: new Float64Array(26),
+    base: 0,
+    lettersToCome: 40,
+    perCopy: 0.3,
+    targets: new Array(26).fill(null),
+  };
+  table.targets[1] = { word: "TRAIN", reward: 10, share: 0.5 }; // B: rack TRAI + B, short N: near
+  table.targets[13] = { word: "TRAIN", reward: 10, share: 0.5 }; // N: rack TRAI + N, complete
+  table.targets[4] = { word: "TREATS", reward: 10, share: 0.5 }; // E: short T, S: not near
+  table.targets[2] = { word: "CAT", reward: 3, share: 0.5 }; // too short
+  const r = rack("TRAI");
+  assert.equal(nearTarget(table, r, "B"), true);
+  assert.equal(nearTarget(table, r, "N"), true);
+  assert.equal(nearTarget(table, r, "E"), false);
+  assert.equal(nearTarget(table, r, "C"), false);
+  assert.equal(nearTarget(table, r, "Z"), false); // no target
+});
+
+test("simulated early bids: boosted vs unboosted (real values and prices)", () => {
+  // Deterministic LCG; random 5–8 tile racks from the tile set, rounds 1–20.
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+  const bag: string[] = [];
+  for (const [l, n] of TILE_SET) for (let i = 0; i < n; i++) bag.push(l);
+  let n = 0, nBid = 0, sumOld = 0, sumNew = 0, boosted = 0, near = 0;
+  for (let s = 0; s < 30; s++) {
+    const size = 5 + Math.floor(rnd() * 4);
+    let r = "";
+    for (let i = 0; i < size; i++) r += bag[Math.floor(rnd() * bag.length)];
+    const open = bag[Math.floor(rnd() * bag.length)];
+    const round = 1 + Math.floor(rnd() * EARLY_ROUNDS);
+    const auctionsLeft = 69 - round;
+    const rk = rack(r);
+    const table = letterValues({ rack: rk, pool: pool(r, open), auctionsLeft, index, explain: true });
+    const base = { letter: open, values: table, balance: 100, auctionsLeft, round, completesWord: completesTarget(table, rk, open) };
+    const old = rawBid(base);
+    const nt = nearTarget(table, rk, open);
+    const neu = rawBid({ ...base, haveLongWord: false, nearTarget: nt });
+    assert.ok(neu.amount >= old.amount, `${r}+${open}`);
+    n++;
+    if (old.amount > 0 || neu.amount > 0) nBid++;
+    sumOld += old.amount;
+    sumNew += neu.amount;
+    if (neu.boost > 1) boosted++;
+    if (neu.boostReason === "early_near") near++;
+  }
+  console.log(
+    `  early sim: ${n} auctions, ${nBid} bid, ${boosted} boosted (${near} near-target); ` +
+      `avg bid ${(sumOld / n).toFixed(1)} → ${(sumNew / n).toFixed(1)} coins (+${(((sumNew - sumOld) / Math.max(1, sumOld)) * 100).toFixed(0)}%)`,
+  );
 });

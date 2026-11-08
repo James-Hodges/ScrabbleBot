@@ -28,7 +28,7 @@ import {
 import { Identity } from "spacetimedb";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { rawBid as decideRawBid, completesTarget } from "./bid.js";
+import { rawBid as decideRawBid, completesTarget, nearTarget, playedLongWord } from "./bid.js";
 import { letterValues, type ValueTable } from "./value.js";
 import { applyBudget } from "./budget.js";
 import { MatchLogs, defaultLogDir, placings, sinceOpen } from "./log.js";
@@ -226,6 +226,9 @@ function tryBid(
     auctionsLeft: state.auctionsLeft,
     round: state.round,
     completesWord: completesTarget(table, rack, letter),
+    // S2-6: early boost until our first 5+ letter word.
+    haveLongWord: playedLongWord(state.words, myBotId),
+    nearTarget: nearTarget(table, rack, letter),
   });
   const rawBid = bid.amount;
   // S2-4/S2-5: spend-down pace and never bidding on the last auction.
@@ -275,6 +278,8 @@ function tryBid(
     marketCap: bid.marketCap,
     marketPct: bid.pct,
     bidReason: bid.reason,
+    boost: bid.boost,
+    boostReason: bid.boostReason,
     balance: state.myBalance,
     rack: Object.fromEntries(rack),
     decideMs: Math.round(decideMs * 1000) / 1000,
